@@ -38,8 +38,22 @@ const Cobradores = () => {
     try {
       setLoading(true);
       const response = await api.get('/cobradores');
-      setCobradores(response.data);
+      console.log('Respuesta API cobradores:', response);
+      
+      // Normalizar la respuesta para obtener un array
+      let cobradoresData = [];
+      if (Array.isArray(response.data)) {
+        cobradoresData = response.data;
+      } else if (response.data?.data && Array.isArray(response.data.data)) {
+        cobradoresData = response.data.data;
+      } else if (response.data?.cobradores && Array.isArray(response.data.cobradores)) {
+        cobradoresData = response.data.cobradores;
+      }
+      
+      console.log('Cobradores a guardar:', cobradoresData);
+      setCobradores(cobradoresData);
     } catch (error) {
+      console.error('Error detallado:', error);
       message.error('Error al cargar cobradores');
     } finally {
       setLoading(false);
@@ -61,6 +75,7 @@ const Cobradores = () => {
       setEditingCobrador(null);
       cargarCobradores();
     } catch (error) {
+      console.error('Error al guardar:', error);
       message.error('Error al guardar cobrador');
     } finally {
       setLoading(false);
@@ -73,6 +88,7 @@ const Cobradores = () => {
       message.success('Cobrador eliminado');
       cargarCobradores();
     } catch (error) {
+      console.error('Error al eliminar:', error);
       message.error('Error al eliminar cobrador');
     }
   };
