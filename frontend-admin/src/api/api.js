@@ -1,8 +1,12 @@
 import axios from 'axios';
 
+<<<<<<< HEAD
 // 👉 Base URL del backend en producción
 const API_URL =
   process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
+=======
+const API_URL = process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
+>>>>>>> 5891eabf1bb5289a597823b972ce4ec5df61443c
 
 console.log('📡 API URL Configurada:', API_URL);
 console.log('🌐 Conectando a:', API_URL);
