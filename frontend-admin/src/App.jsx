@@ -5,15 +5,12 @@ import esES from 'antd/locale/es_ES';
 
 import Login from './pages/Login';
 import Layout from './components/Layout';
-import Dashboard from './pages/Dashboard';  // ← Esto debe apuntar a pages/Dashboard.jsx
+import Dashboard from './pages/Dashboard';
 import Cobradores from './pages/Cobradores';
 import Clientes from './pages/Clientes';
 import Cartera from './pages/Cartera';
 import Calendario from './pages/Calendario';
-
-
 import Prestamos from './pages/Prestamos';
-
 import Reportes from './pages/Reportes';
 import Configuracion from './pages/Configuracion';
 import Perfil from './pages/Perfil';
@@ -40,6 +37,7 @@ function App() {
           userData.tenantId = storedTenantId;
         }
         setUser(userData);
+        console.log('✅ Sesión restaurada desde localStorage');
       } catch (e) {
         console.error('Error restaurando sesión:', e);
       }
@@ -48,7 +46,26 @@ function App() {
   }, []);
 
   const handleLogin = (userData, token) => {
+    console.log('🔐 handleLogin llamado con:', { userData, token });
+    
+    if (!userData || !token) {
+      console.error('❌ Error: Faltan datos en handleLogin');
+      return;
+    }
+    
+    // Guardar en localStorage
+    localStorage.setItem('admin_token', token);
+    localStorage.setItem('admin_user', JSON.stringify(userData));
+    if (userData.tenantId) {
+      localStorage.setItem('tenantId', userData.tenantId);
+    }
+    
+    // Guardar en estado
     setUser(userData);
+    
+    console.log('✅ Datos guardados correctamente');
+    console.log('   - Token:', token.substring(0, 50) + '...');
+    console.log('   - TenantId:', userData.tenantId);
   };
 
   const handleLogout = () => {
@@ -75,9 +92,6 @@ function App() {
             <Route path="/cobradores" element={<Cobradores />} />
             <Route path="/cartera" element={<Cartera />} />
             <Route path="/calendario" element={<Calendario />} />
-
-
-
             <Route path="/reportes" element={<Reportes />} />
             <Route path="/configuracion" element={<Configuracion />} />
             <Route path="/perfil" element={<Perfil />} />
