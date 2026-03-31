@@ -4,11 +4,10 @@ import axios from 'axios';
 const API_URL = process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
 
 console.log('📡 API URL Configurada:', API_URL);
-console.log('🌐 Conectando a:', API_URL);
 
 const api = axios.create({
   baseURL: API_URL,
-  timeout: 15000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json'
   }
@@ -20,29 +19,29 @@ api.interceptors.request.use(
     const token = localStorage.getItem('admin_token');
     const tenantId = localStorage.getItem('tenantId');
     
-    console.log('🚀 Petición:', config.method?.toUpperCase(), config.url);
-    console.log('📡 Token existe:', !!token);
-    console.log('📡 TenantId:', tenantId);
+    console.log(`🚀 Petición: ${config.method?.toUpperCase()} ${config.url}`);
+    console.log(`📡 Token: ${token ? '✅ Presente' : '❌ No'}`);
+    console.log(`📡 TenantId desde localStorage: "${tenantId}"`);
     
+    // Siempre agregar el token si existe
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      console.log('✅ Authorization header agregado');
-    } else {
-      console.log('⚠️ No hay token');
     }
     
-    // IMPORTANTE: Enviar tenantId para todas las rutas excepto auth
+    // IMPORTANTE: Agregar tenantId para TODAS las rutas excepto auth
     if (tenantId && !config.url.includes('/auth/')) {
       config.headers['x-tenant-id'] = tenantId;
-      console.log('✅ x-tenant-id header agregado:', tenantId);
+      console.log(`✅ Header x-tenant-id agregado: ${tenantId}`);
     } else if (!tenantId && !config.url.includes('/auth/')) {
       console.warn('⚠️ No hay tenantId en localStorage');
     }
     
-    // Asegurar que Content-Type esté presente
-    if (!config.headers['Content-Type']) {
-      config.headers['Content-Type'] = 'application/json';
-    }
+    // Debug: Mostrar headers finales
+    console.log('📋 Headers enviados:', {
+      Authorization: config.headers.Authorization ? 'Bearer ***' : 'No',
+      'x-tenant-id': config.headers['x-tenant-id'] || 'No',
+      'Content-Type': config.headers['Content-Type']
+    });
     
     return config;
   },
@@ -60,6 +59,7 @@ api.interceptors.response.use(
   },
   (err) => {
     console.error(`❌ Error: ${err.response?.status}`, err.response?.config?.url);
+    console.error('Detalle:', err.response?.data);
     
     if (err.response?.status === 401) {
       console.log('🔐 Sesión expirada, redirigiendo al login...');
