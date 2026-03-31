@@ -1,89 +1,120 @@
 import axios from 'axios';
 
-<<<<<<< HEAD
 // 👉 Base URL del backend en producción
-const API_URL =
-  process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
-=======
 const API_URL = process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
->>>>>>> 5891eabf1bb5289a597823b972ce4ec5df61443c
 
 console.log('📡 API URL Configurada:', API_URL);
 console.log('🌐 Conectando a:', API_URL);
 
 const api = axios.create({
   baseURL: API_URL,
+  timeout: 15000,
   headers: {
-    'Content-Type': 'application/json',
-  },
+    'Content-Type': 'application/json'
+  }
 });
 
-// Interceptor para agregar token y tenantId
+// Interceptor para token
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('admin_token');
-    const tenantId = localStorage.getItem('tenantId');
-
-    console.log(`🚀 Petición: ${config.method.toUpperCase()} ${config.url}`);
-
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-
-    if (tenantId && !config.url.includes('/auth/')) {
-      config.headers['x-tenant-id'] = tenantId;
-      console.log('📡 Tenant ID:', tenantId);
-    }
-
+    console.log('🚀 Petición:', config.method?.toUpperCase(), config.url);
     return config;
   },
-  (error) => {
-    console.error('❌ Error en request:', error);
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
-// Interceptor para manejar respuestas
+// Interceptor para respuestas
 api.interceptors.response.use(
   (response) => {
-    console.log(`✅ Respuesta: ${response.status} ${response.config.url}`);
+    console.log('✅ Respuesta:', response.status, response.config.url);
     return response;
   },
-  (error) => {
-    console.error(
-      `❌ Error: ${error.response?.status}`,
-      error.response?.data
-    );
-
-    if (error.response?.status === 401) {
+  (err) => {
+    if (err.response?.status === 401) {
       localStorage.removeItem('admin_token');
       localStorage.removeItem('admin_user');
-      localStorage.removeItem('tenantId');
-      window.location.href = '/login';
+      window.location.href = '/';
     }
-
-    return Promise.reject(error);
+    console.error('❌ Error:', err.response?.status, err.config?.url);
+    return Promise.reject(err);
   }
 );
 
-// Funciones de autenticación
-export const login = async (email, password) => {
-  console.log('🔑 Intentando login:', email);
-  const response = await api.post('/auth/admin/login', { email, password });
-  return response.data;
+// ===== SERVICIOS DE AUTENTICACIÓN =====
+export const authAPI = {
+  login: (email, password) => api.post('/auth/admin/login', { email, password }),
+  logout: () => api.post('/auth/logout')
 };
 
-// Dashboard charts
-export const getDashboardCharts = async () => {
-  const response = await api.get('/dashboard-charts');
-  return response.data;
+// ===== SERVICIOS DE DASHBOARD =====
+export const dashboardAPI = {
+  get: () => api.get('/dashboard'),
+  getStats: () => api.get('/dashboard/stats'),
+  getCharts: () => api.get('/dashboard/charts')
 };
 
-// Dashboard stats
-export const getDashboardStats = async () => {
-  console.log('📊 Solicitando estadísticas del dashboard...');
-  const response = await api.get('/dashboard');
-  return response.data;
+// ===== SERVICIOS DE COBRADORES =====
+export const cobradoresAPI = {
+  getAll: (search) => api.get('/cobradores', { params: { search } }),
+  getById: (id) => api.get(`/cobradores/${id}`),
+  create: (data) => api.post('/cobradores', data),
+  update: (id, data) => api.put(`/cobradores/${id}`, data),
+  delete: (id) => api.delete(`/cobradores/${id}`)
+};
+
+// ===== SERVICIOS DE CLIENTES =====
+export const clientesAPI = {
+  getAll: (search) => api.get('/clientes', { params: { search } }),
+  getById: (id) => api.get(`/clientes/${id}`),
+  create: (data) => api.post('/clientes', data),
+  update: (id, data) => api.put(`/clientes/${id}`, data),
+  delete: (id) => api.delete(`/clientes/${id}`)
+};
+
+// ===== SERVICIOS DE PRÉSTAMOS =====
+export const prestamosAPI = {
+  getAll: (params) => api.get('/prestamos', { params }),
+  getById: (id) => api.get(`/prestamos/${id}`),
+  create: (data) => api.post('/prestamos', data),
+  update: (id, data) => api.put(`/prestamos/${id}`, data),
+  delete: (id) => api.delete(`/prestamos/${id}`),
+  getByCliente: (clienteId) => api.get(`/prestamos/cliente/${clienteId}`),
+  registrarPago: (data) => api.post('/pagos', data)
+};
+
+// ===== SERVICIOS DE INVENTARIO =====
+export const inventarioAPI = {
+  getAll: (params) => api.get('/inventario', { params }),
+  getById: (id) => api.get(`/inventario/${id}`),
+  create: (data) => api.post('/inventario', data),
+  update: (id, data) => api.put(`/inventario/${id}`, data),
+  delete: (id) => api.delete(`/inventario/${id}`),
+  getStats: () => api.get('/inventario/stats/resumen')
+};
+
+// ===== SERVICIOS DE PAGOS =====
+export const pagosAPI = {
+  create: (prestamoId, data) => api.post(`/pagos/${prestamoId}`, data),
+  getByPrestamo: (prestamoId) => api.get(`/pagos/prestamo/${prestamoId}`)
+};
+
+// ===== SERVICIOS DE CARTERA =====
+export const carteraAPI = {
+  getResumen: () => api.get('/cartera'),
+  getPrestamos: () => api.get('/cartera/prestamos'),
+  getPorCobrador: () => api.get('/cartera/cobradores'),
+  getEstadisticas: () => api.get('/cartera/estadisticas'),
+  getPagosResumen: () => api.get('/cartera/pagos/resumen')
+};
+
+// ===== SERVICIOS DE REPORTES =====
+export const reportesAPI = {
+  getDiario: (fecha) => api.get(`/reportes/diario?fecha=${fecha}`),
+  getMensual: (mes, año) => api.get(`/reportes/mensual?mes=${mes}&año=${año}`)
 };
 
 export default api;
