@@ -12,22 +12,21 @@ const api = axios.create({
   }
 });
 
-// Interceptor para agregar token y debug
+// Interceptor para agregar token
 api.interceptors.request.use(config => {
   const token = localStorage.getItem("super_token");
-  
+
   console.log(`📤 Request a ${config.method?.toUpperCase()} ${config.url}`);
   console.log('🔑 Token presente:', !!token);
-  
+
   if (token) {
-    console.log('🔐 Token (primeros 20 chars):', token.substring(0, 20) + '...');
     config.headers.Authorization = `Bearer ${token}`;
   }
-  
+
   return config;
 });
 
-// Interceptor para manejar errores
+// Interceptor para manejar errores - NO redirigir automaticamente
 api.interceptors.response.use(
   response => {
     console.log(`✅ Respuesta ${response.status} de ${response.config.url}`);
@@ -35,19 +34,22 @@ api.interceptors.response.use(
   },
   error => {
     console.error(`❌ Error en ${error.config?.url}:`);
-    console.error('   Status:', error.response?.status);
-    console.error('   Data:', error.response?.data);
-    console.error('   Message:', error.message);
-    
+    console.error(' Status:', error.response?.status);
+    console.error(' Data:', error.response?.data);
+
+    // Solo redirigir si el token es invalido (401) y NO estamos en la ruta de login
     const url = error.config?.url || "";
-    const esLogin = url.includes('/auth/admin/login');
-    
-    if (error.response?.status === 401 && !esLogin) {
-      console.log('🚫 Token inválido o sesión expirada, redirigiendo a login');
+    const esLoginRoute = url.includes('/auth/login');
+
+    if (error.response?.status === 401 && !esLoginRoute) {
+      console.log('🚫 Token invalido, limpiando sesion');
       localStorage.removeItem("super_token");
-      window.location.href = '/login';
+      localStorage.removeItem("userRole");
+      localStorage.removeItem("userName");
+      localStorage.removeItem("userEmail");
+      // No redirigir aqui - dejar que React Router maneje
     }
-    
+
     return Promise.reject(error);
   }
 );
