@@ -22,7 +22,7 @@ const Notificaciones = () => {
     console.log('🏢 Conectando con tenantId:', tenantId);
 
     // Conectar al servidor WebSocket
-    const newSocket = io('http://localhost:5000', {
+    const newSocket = io('https://prestamos-chito.vercel.app', {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
