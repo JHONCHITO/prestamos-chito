@@ -24,19 +24,22 @@ const Login = ({ onLogin }) => {
       
       const response = await login(email, password);
       
+      // OBTENER DATOS DEL USUARIO (puede venir como 'admin' o 'user')
+      const userData = response.admin || response.user;
+      
       console.log('🔐 2. Respuesta recibida:', response);
-      console.log('🔐 3. user object:', response.user);
-      console.log('🔐 4. tenantId en response.user:', response.user?.tenantId);
+      console.log('🔐 3. user object:', userData);
+      console.log('🔐 4. tenantId en userData:', userData?.tenantId);
       
       if (!response.token) {
         throw new Error('No se recibió token');
       }
       
-      if (!response.user) {
+      if (!userData) {
         throw new Error('No se recibieron datos de usuario');
       }
       
-      if (!response.user.tenantId) {
+      if (!userData.tenantId) {
         console.error('❌ ERROR CRÍTICO: No hay tenantId en la respuesta');
         setError('Error: Usuario sin ID de empresa. Contacte al administrador.');
         setLoading(false);
@@ -48,8 +51,8 @@ const Login = ({ onLogin }) => {
       
       // GUARDAR DATOS
       localStorage.setItem('admin_token', response.token);
-      localStorage.setItem('admin_user', JSON.stringify(response.user));
-      localStorage.setItem('tenantId', response.user.tenantId);
+      localStorage.setItem('admin_user', JSON.stringify(userData));
+      localStorage.setItem('tenantId', userData.tenantId);
       
       console.log('✅ 5. Datos guardados:');
       console.log('   - tenantId:', localStorage.getItem('tenantId'));
@@ -77,7 +80,7 @@ const Login = ({ onLogin }) => {
       console.log('✅ Login exitoso! Redirigiendo...');
       
       // Llamar al callback del padre
-      onLogin(response.user, response.token);
+      onLogin(userData, response.token);
       
     } catch (err) {
       console.error('❌ Error en login:', err);
