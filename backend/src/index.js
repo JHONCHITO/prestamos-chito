@@ -11,9 +11,28 @@ const socketIo = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// ✅ LISTA COMPLETA DE ORÍGENES PERMITIDOS
+const allowedOrigins = [
+  // Desarrollo local
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://localhost:3002',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5000',
+  // Frontend Super Admin
+  'https://super-admin-panel-amber.vercel.app',
+  // Frontend Oficinas (agrega TODAS las URLs de tus frontends)
+  'https://prestamos-admin-5vuebxorl-jhon3.vercel.app',
+  'https://prestamos-chito.vercel.app',
+  // Agrega más URLs si es necesario
+];
+
+// ✅ CONFIGURACIÓN CORS PARA SOCKET.IO
 const io = socketIo(server, {
   cors: {
-    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:5173', 'http://localhost:5174', 'https://super-admin-panel-amber.vercel.app'],
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id']
@@ -26,63 +45,76 @@ app.set('io', io);
 
 console.log("🔍 MONGODB_URI:", process.env.MONGODB_URI ? "OK" : "NO DEFINIDO");
 
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3002',
-  'http://localhost:5173',
-  'http://localhost:5174',
-  'https://super-admin-panel-amber.vercel.app'
-];
-
+// ✅ CONFIGURACIÓN CORS PARA EXPRESS (MEJORADA)
 app.use(cors({
   origin: function (origin, callback) {
+    // Permitir solicitudes sin origen (como Postman o curl)
     if (!origin) return callback(null, true);
+    
+    // Verificar si el origen está en la lista de permitidos
     const isLocalAllowed = allowedOrigins.includes(origin);
     const isVercelAllowed = origin.endsWith('.vercel.app');
-    if (isLocalAllowed || isVercelAllowed) {
+    const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
+    
+    if (isLocalAllowed || isVercelAllowed || isLocalhost) {
+      console.log(`✅ CORS permitido para: ${origin}`);
       return callback(null, true);
     }
+    
+    console.log(`❌ CORS bloqueado para: ${origin}`);
     return callback(new Error(`CORS no permitido para origen: ${origin}`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'admin-secret']
 }));
 
+// Manejar explícitamente las solicitudes OPTIONS (preflight)
 app.options('*', cors());
 
 app.use(express.json({
-  verify: (req,res,buf)=>{
-    try{ JSON.parse(buf); }catch(e){
-      res.status(400).json({ error:'JSON inválido' });
+  verify: (req, res, buf) => {
+    try { 
+      JSON.parse(buf); 
+    } catch(e) {
+      res.status(400).json({ error: 'JSON inválido' });
       throw new Error('Invalid JSON');
     }
   }
 }));
 
-app.use(express.urlencoded({ extended:true }));
+app.use(express.urlencoded({ extended: true }));
 
-app.use((req,res,next)=>{
-  console.log(`📡 ${req.method} ${req.path} - IP: ${req.ip}`);
+// Middleware de logging
+app.use((req, res, next) => {
+  console.log(`📡 ${req.method} ${req.path} - Origen: ${req.headers.origin || 'desconocido'}`);
   next();
 });
 
 /* RUTAS BÁSICAS */
-app.get('/', (req,res)=> res.json({ message:"API funcionando", timestamp:new Date().toISOString() }));
-app.get('/api/test',(req,res)=> res.json({ message:"API funcionando correctamente" }));
+app.get('/', (req, res) => res.json({ 
+  message: "API funcionando", 
+  timestamp: new Date().toISOString(),
+  cors_enabled: true,
+  allowed_origins: allowedOrigins
+}));
+
+app.get('/api/test', (req, res) => res.json({ 
+  message: "API funcionando correctamente",
+  cors_origin: req.headers.origin || 'sin origen'
+}));
 
 /* AUTH SIN TENANT */
 app.use('/api/auth', require('./routes/auth'));
 
 /* DECODIFICAR TOKEN GLOBAL */
-app.use((req,res,next)=>{
+app.use((req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
-  if(token){
-    try{
+  if (token) {
+    try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
       req.user = decoded;
-    }catch(err){
+    } catch(err) {
       console.log('⚠️ Token inválido:', err.message);
     }
   }
@@ -171,25 +203,44 @@ io.on('connection', (socket) => {
 
 /* DEBUG Y 404 */
 app.get('/api/debug/db', (req, res) => {
-  res.json({ ok: true, dbName: mongoose.connection.name, readyState: mongoose.connection.readyState });
+  res.json({ 
+    ok: true, 
+    dbName: mongoose.connection.name, 
+    readyState: mongoose.connection.readyState,
+    cors_origins_allowed: allowedOrigins
+  });
 });
 
-app.use('*',(req,res)=>{
-  res.status(404).json({ error:'Ruta no encontrada', path:req.originalUrl });
+app.get('/api/debug/cors-test', (req, res) => {
+  res.json({
+    message: "CORS está funcionando correctamente",
+    your_origin: req.headers.origin || 'sin origen',
+    allowed_origins: allowedOrigins
+  });
 });
 
-/* MONGO CONECT */
+// Manejo de rutas no encontradas
+app.use('*', (req, res) => {
+  res.status(404).json({ 
+    error: 'Ruta no encontrada', 
+    path: req.originalUrl,
+    method: req.method
+  });
+});
+
+/* MONGO CONNECT */
 mongoose.connect(process.env.MONGODB_URI)
-.then(()=>{
-  console.log("✅ MongoDB conectado");
-})
-.catch(err=>{
-  console.log("❌ Error MongoDB:", err.message);
-  process.exit(1);
-});
+  .then(() => {
+    console.log("✅ MongoDB conectado");
+  })
+  .catch(err => {
+    console.log("❌ Error MongoDB:", err.message);
+    process.exit(1);
+  });
 
 const PORT = process.env.PORT || 5000;
 
+// Solo iniciar el servidor si no estamos en producción (Vercel)
 if (process.env.NODE_ENV !== 'production') {
   server.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
