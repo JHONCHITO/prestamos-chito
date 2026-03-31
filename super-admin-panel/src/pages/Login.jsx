@@ -7,7 +7,7 @@ import { login } from '../api/superadmin';
 
 const { Title, Text } = Typography;
 
-const Login = () => {
+const Login = ({ onLogin }) => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
@@ -15,17 +15,20 @@ const Login = () => {
     try {
       setLoading(true);
       console.log('Intentando login con:', values.email);
-      
+
       const response = await login(values.email, values.password);
       console.log('Respuesta login:', response);
-      
+
       if (response.token) {
         localStorage.setItem('super_token', response.token);
         localStorage.setItem('userRole', response.user.rol);
         localStorage.setItem('userName', response.user.nombre);
         localStorage.setItem('userEmail', response.user.email);
-        
+
         message.success('¡Bienvenido al Panel de Control Galáctico!');
+
+        if (onLogin) onLogin();
+
         navigate('/superadmin/dashboard');
       }
     } catch (error) {
@@ -58,7 +61,6 @@ const Login = () => {
           </Title>
           <Text type="secondary">Control Galáctico</Text>
         </div>
-
         <Form
           name="login"
           onFinish={onFinish}
@@ -78,7 +80,6 @@ const Login = () => {
               disabled={loading}
             />
           </Form.Item>
-
           <Form.Item
             name="password"
             rules={[{ required: true, message: 'Por favor ingrese su contraseña' }]}
@@ -89,7 +90,6 @@ const Login = () => {
               disabled={loading}
             />
           </Form.Item>
-
           <Form.Item>
             <Button
               type="primary"
@@ -102,7 +102,6 @@ const Login = () => {
             </Button>
           </Form.Item>
         </Form>
-
         <div style={{ textAlign: 'center', marginTop: 16 }}>
           <Text type="secondary">Sistema de Gestión de Préstamos</Text>
         </div>
