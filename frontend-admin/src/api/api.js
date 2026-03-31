@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+// 👉 Base URL del backend
+const API_URL =
+  process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
 
 console.log('📡 API URL Configurada:', API_URL);
 console.log('🌐 Conectando a:', API_URL);
@@ -17,18 +19,18 @@ api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('admin_token');
     const tenantId = localStorage.getItem('tenantId');
-    
+
     console.log(`🚀 Petición: ${config.method.toUpperCase()} ${config.url}`);
-    
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    
+
     if (tenantId && !config.url.includes('/auth/')) {
       config.headers['x-tenant-id'] = tenantId;
       console.log('📡 Tenant ID:', tenantId);
     }
-    
+
     return config;
   },
   (error) => {
@@ -44,15 +46,18 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    console.error(`❌ Error: ${error.response?.status}`, error.response?.data);
-    
+    console.error(
+      `❌ Error: ${error.response?.status}`,
+      error.response?.data
+    );
+
     if (error.response?.status === 401) {
       localStorage.removeItem('admin_token');
       localStorage.removeItem('admin_user');
       localStorage.removeItem('tenantId');
       window.location.href = '/login';
     }
-    
+
     return Promise.reject(error);
   }
 );
@@ -70,7 +75,7 @@ export const getDashboardCharts = async () => {
   return response.data;
 };
 
-// Dashboard stats (nueva función)
+// Dashboard stats
 export const getDashboardStats = async () => {
   console.log('📊 Solicitando estadísticas del dashboard...');
   const response = await api.get('/dashboard');
