@@ -23,7 +23,7 @@ const Notificaciones = () => {
 
     // Conectar al servidor WebSocket
     const newSocket = io('https://prestamos-chito.vercel.app', {
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
