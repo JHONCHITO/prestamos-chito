@@ -14,32 +14,61 @@ const api = axios.create({
   }
 });
 
-// Interceptor para token
+// Interceptor para agregar token y tenantId (CORREGIDO)
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('admin_token');
+    const tenantId = localStorage.getItem('tenantId');
+    
+    console.log('🚀 Petición:', config.method?.toUpperCase(), config.url);
+    console.log('📡 Token existe:', !!token);
+    console.log('📡 TenantId:', tenantId);
+    
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+      console.log('✅ Authorization header agregado');
+    } else {
+      console.log('⚠️ No hay token');
     }
-    console.log('🚀 Petición:', config.method?.toUpperCase(), config.url);
+    
+    // IMPORTANTE: Enviar tenantId para todas las rutas excepto auth
+    if (tenantId && !config.url.includes('/auth/')) {
+      config.headers['x-tenant-id'] = tenantId;
+      console.log('✅ x-tenant-id header agregado:', tenantId);
+    } else if (!tenantId && !config.url.includes('/auth/')) {
+      console.warn('⚠️ No hay tenantId en localStorage');
+    }
+    
+    // Asegurar que Content-Type esté presente
+    if (!config.headers['Content-Type']) {
+      config.headers['Content-Type'] = 'application/json';
+    }
+    
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    console.error('❌ Error en request interceptor:', error);
+    return Promise.reject(error);
+  }
 );
 
-// Interceptor para respuestas
+// Interceptor para manejar respuestas
 api.interceptors.response.use(
   (response) => {
-    console.log('✅ Respuesta:', response.status, response.config.url);
+    console.log(`✅ Respuesta: ${response.status} ${response.config.url}`);
     return response;
   },
   (err) => {
+    console.error(`❌ Error: ${err.response?.status}`, err.response?.config?.url);
+    
     if (err.response?.status === 401) {
+      console.log('🔐 Sesión expirada, redirigiendo al login...');
       localStorage.removeItem('admin_token');
       localStorage.removeItem('admin_user');
+      localStorage.removeItem('tenantId');
       window.location.href = '/';
     }
-    console.error('❌ Error:', err.response?.status, err.config?.url);
+    
     return Promise.reject(err);
   }
 );
