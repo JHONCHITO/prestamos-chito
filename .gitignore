@@ -1,0 +1,72 @@
+# Dependencies
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/pnpm-debug.log*
+
+# Vercel
+.vercel
+
+# Next.js
+**/.next/
+**/out/
+**/next-env.d.ts
+**/.env*.local
+**/next.config.js
+
+# Build outputs
+**/dist/
+**/build/
+**/coverage/
+
+# Environment variables
+**/.env
+**/.env.local
+**/.env.development.local
+**/.env.test.local
+**/.env.production.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# MongoDB
+**/mongod.lock
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+**/.nyc_output
+**/coverage/
+**/coverage-*/
+**/test-results/
+**/jest-report.json
+
+# Storybook
+.storybook/out
