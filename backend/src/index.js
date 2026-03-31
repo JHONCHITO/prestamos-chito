@@ -14,44 +14,23 @@ const server = http.createServer(app);
 
 // ✅ LISTA COMPLETA DE ORÍGENES PERMITIDOS
 const allowedOrigins = [
-  // Desarrollo local
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:3002',
   'http://localhost:5173',
   'http://localhost:5174',
   'http://localhost:5000',
-  // Frontend Super Admin
   'https://super-admin-panel-amber.vercel.app',
-  // Frontend Oficinas (agrega TODAS las URLs de tus frontends)
   'https://prestamos-admin-5vuebxorl-jhon3.vercel.app',
   'https://prestamos-chito.vercel.app',
-  // Agrega más URLs si es necesario
+  'https://frontend-admin-git-main-jhon3.vercel.app',
 ];
 
-// ✅ CONFIGURACIÓN CORS PARA SOCKET.IO
-const io = socketIo(server, {
-  cors: {
-    origin: allowedOrigins,
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id']
-  },
-  transports: ['websocket', 'polling']
-});
-
-// Guardar io en app para acceder desde las rutas
-app.set('io', io);
-
-console.log("🔍 MONGODB_URI:", process.env.MONGODB_URI ? "OK" : "NO DEFINIDO");
-
-// ✅ CONFIGURACIÓN CORS PARA EXPRESS (MEJORADA)
-app.use(cors({
+// ✅ FUNCIÓN DE CORS PERSONALIZADA
+const corsOptions = {
   origin: function (origin, callback) {
-    // Permitir solicitudes sin origen (como Postman o curl)
     if (!origin) return callback(null, true);
     
-    // Verificar si el origen está en la lista de permitidos
     const isLocalAllowed = allowedOrigins.includes(origin);
     const isVercelAllowed = origin.endsWith('.vercel.app');
     const isLocalhost = origin.includes('localhost') || origin.includes('127.0.0.1');
@@ -65,12 +44,31 @@ app.use(cors({
     return callback(new Error(`CORS no permitido para origen: ${origin}`));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'admin-secret']
-}));
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'admin-secret'],
+  exposedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200
+};
 
-// Manejar explícitamente las solicitudes OPTIONS (preflight)
-app.options('*', cors());
+// ✅ APLICAR CORS ANTES QUE CUALQUIER OTRA COSA
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+
+// ✅ Middleware para asegurar headers CORS en TODAS las respuestas
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app') || origin.includes('localhost'))) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tenant-id, admin-secret');
+  }
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
 app.use(express.json({
   verify: (req, res, buf) => {
@@ -128,17 +126,11 @@ app.use('/api/pagos', require('./routes/pagos'));
 /* TENANT MIDDLEWARE */
 const tenantMiddleware = require('./middleware/tenant.middleware');
 
-// Middlewares de protección por Tenant
-app.use('/api/dashboard', tenantMiddleware);
-app.use('/api/cobradores', tenantMiddleware);
-app.use('/api/clientes', tenantMiddleware);
-app.use('/api/prestamos', tenantMiddleware);
-app.use('/api/inventario', tenantMiddleware);
-app.use('/api/sedes', tenantMiddleware);
-app.use('/api/dashboard-charts', tenantMiddleware);
-app.use('/api/cobrador', tenantMiddleware);
-app.use('/api/calendario', tenantMiddleware);
-app.use('/api/cartera', tenantMiddleware);
+// ✅ PRIMERO aplicar tenant middleware, DESPUÉS las rutas
+const tenantRoutes = ['/api/dashboard', '/api/cobradores', '/api/clientes', '/api/prestamos', '/api/inventario', '/api/sedes', '/api/dashboard-charts', '/api/cobrador', '/api/calendario', '/api/cartera'];
+
+// Aplicar tenant middleware a las rutas específicas
+app.use(tenantRoutes, tenantMiddleware);
 
 /* RUTAS DE OFICINA */
 app.use('/api/dashboard', require('./routes/dashboard'));
@@ -151,6 +143,14 @@ app.use('/api/dashboard-charts', require('./routes/dashboardCharts'));
 app.use('/api/cobrador', require('./routes/cobrador.routes'));
 app.use('/api/calendario', require('./routes/calendario'));
 app.use('/api/cartera', require('./routes/cartera'));
+
+/* CONFIGURACIÓN DE SOCKET.IO DESPUÉS DE LAS RUTAS */
+const io = socketIo(server, {
+  cors: corsOptions,
+  transports: ['polling', 'websocket']
+});
+
+app.set('io', io);
 
 /* SOCKET.IO - COMUNICACIÓN EN TIEMPO REAL */
 io.on('connection', (socket) => {
