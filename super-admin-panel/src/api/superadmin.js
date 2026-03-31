@@ -1,7 +1,6 @@
 import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-
 console.log('🔧 API URL configurada:', API_URL);
 
 const api = axios.create({
@@ -14,7 +13,7 @@ const api = axios.create({
 // Interceptor para agregar token
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('super_token');
     console.log(`📤 ${config.method.toUpperCase()} ${config.url}`, token ? '✅ Con token' : '❌ Sin token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -35,12 +34,7 @@ api.interceptors.response.use(
   },
   (error) => {
     console.error('❌ Error respuesta:', error.response?.status, error.response?.data);
-    if (error.response?.status === 401) {
-      console.log('🔐 Token expirado');
-      localStorage.removeItem('token');
-      localStorage.removeItem('userRole');
-      window.location.href = '/login';
-    }
+    // NO redirigir automáticamente en 401 - dejar que el componente lo maneje
     return Promise.reject(error);
   }
 );
