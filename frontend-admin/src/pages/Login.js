@@ -139,7 +139,7 @@ export default function Login({ onLogin }) {
     setLoading(true); setError('');
     try {
       const res = await authAPI.login(email, password);
-      onLogin(res.data.user, res.data.token);
+      onLogin(res.data.admin || res.data.user, res.data.token);
     } catch (err) {
       setError(err.response?.data?.error || 'Error al iniciar sesión');
     } finally { setLoading(false); }
