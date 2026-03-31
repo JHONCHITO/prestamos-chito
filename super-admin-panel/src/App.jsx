@@ -13,7 +13,7 @@ message.config({
 });
 
 function App() {
-  const isAuthenticated = localStorage.getItem('token');
+  const isAuthenticated = localStorage.getItem('super_token');  
   const userRole = localStorage.getItem('userRole');
 
   return (
