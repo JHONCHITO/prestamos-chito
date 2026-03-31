@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// 👉 Base URL del backend
+// 👉 Base URL del backend en producción
 const API_URL =
   process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
 
