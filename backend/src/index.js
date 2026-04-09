@@ -12,7 +12,6 @@ const socketIo = require('socket.io');
 
 const telegramRoutes = require('./telegram/telegram.routes');
 
-
 const app = express();
 const server = http.createServer(app);
 
@@ -70,31 +69,25 @@ app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.header(
-      'Access-Control-Allow-Headers',
-      'Content-Type, Authorization, x-tenant-id, admin-secret'
-    );
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-tenant-id, admin-secret');
   }
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-
   next();
 });
 
-app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      try {
-        JSON.parse(buf);
-      } catch (e) {
-        res.status(400).json({ error: 'JSON inválido' });
-        throw new Error('Invalid JSON');
-      }
+app.use(express.json({
+  verify: (req, res, buf) => {
+    try {
+      JSON.parse(buf);
+    } catch (e) {
+      res.status(400).json({ error: 'JSON inválido' });
+      throw new Error('Invalid JSON');
     }
-  })
-);
+  }
+}));
 
 app.use(express.urlencoded({ extended: true }));
 
@@ -105,21 +98,17 @@ app.use((req, res, next) => {
 });
 
 /* RUTAS BÁSICAS */
-app.get('/', (req, res) =>
-  res.json({
-    message: 'API funcionando',
-    timestamp: new Date().toISOString(),
-    cors_enabled: true,
-    allowed_origins: allowedOrigins
-  })
-);
+app.get('/', (req, res) => res.json({
+  message: 'API funcionando',
+  timestamp: new Date().toISOString(),
+  cors_enabled: true,
+  allowed_origins: allowedOrigins
+}));
 
-app.get('/api/test', (req, res) =>
-  res.json({
-    message: 'API funcionando correctamente',
-    cors_origin: req.headers.origin || 'sin origen'
-  })
-);
+app.get('/api/test', (req, res) => res.json({
+  message: 'API funcionando correctamente',
+  cors_origin: req.headers.origin || 'sin origen'
+}));
 
 /* AUTH SIN TENANT */
 app.use('/api/auth', require('./routes/auth'));
@@ -130,19 +119,14 @@ app.use('/api/telegram', telegramRoutes);
 /* DECODIFICAR TOKEN GLOBAL */
 app.use((req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
-
   if (token) {
     try {
-      const decoded = jwt.verify(
-        token,
-        process.env.JWT_SECRET || 'tu_secreto_temporal'
-      );
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
       req.user = decoded;
     } catch (err) {
       console.log('⚠️ Token inválido:', err.message);
     }
   }
-
   next();
 });
 
@@ -153,7 +137,6 @@ app.use('/api/pagos', require('./routes/pagos'));
 /* TENANT MIDDLEWARE */
 const tenantMiddleware = require('./middleware/tenant.middleware');
 
-// ✅ PRIMERO aplicar tenant middleware, DESPUÉS las rutas
 const tenantRoutes = [
   '/api/dashboard',
   '/api/cobradores',
@@ -167,7 +150,6 @@ const tenantRoutes = [
   '/api/cartera'
 ];
 
-// Aplicar tenant middleware a las rutas específicas
 app.use(tenantRoutes, tenantMiddleware);
 
 /* RUTAS DE OFICINA */
@@ -182,7 +164,7 @@ app.use('/api/cobrador', require('./routes/cobrador.routes'));
 app.use('/api/calendario', require('./routes/calendario'));
 app.use('/api/cartera', require('./routes/cartera'));
 
-/* CONFIGURACIÓN DE SOCKET.IO DESPUÉS DE LAS RUTAS */
+/* CONFIGURACIÓN DE SOCKET.IO */
 const io = socketIo(server, {
   cors: corsOptions,
   transports: ['polling', 'websocket']
@@ -197,10 +179,7 @@ io.on('connection', (socket) => {
   socket.on('join-tenant', (tenantId) => {
     socket.join(`tenant-${tenantId}`);
     console.log(`📡 Cliente ${socket.id} unido a sala tenant-${tenantId}`);
-    socket.emit('joined', {
-      tenantId,
-      message: 'Conectado al canal de notificaciones'
-    });
+    socket.emit('joined', { tenantId, message: 'Conectado al canal de notificaciones' });
   });
 
   socket.on('join-superadmin', () => {
@@ -242,7 +221,7 @@ io.on('connection', (socket) => {
   });
 });
 
-/* DEBUG Y 404 */
+/* DEBUG */
 app.get('/api/debug/db', (req, res) => {
   res.json({
     ok: true,
@@ -270,25 +249,17 @@ app.use('*', (req, res) => {
 });
 
 /* MONGO CONNECT */
-mongoose
-  .connect(process.env.MONGODB_URI)
-  .then(() => {
-    console.log('✅ MongoDB conectado');
-  })
-  .catch((err) => {
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('✅ MongoDB conectado'))
+  .catch(err => {
     console.log('❌ Error MongoDB:', err.message);
     process.exit(1);
   });
 
+// ✅ CAMBIO CLAVE: server.listen siempre activo (funciona en Render y en local)
 const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+});
 
-// Solo iniciar el servidor si no estamos en producción (Vercel)
-if (process.env.NODE_ENV !== 'production') {
-  server.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  });
-}
-
-// Exporta app y server para Vercel (usará serverless)
 module.exports = app;
-module.exports.server = server;
