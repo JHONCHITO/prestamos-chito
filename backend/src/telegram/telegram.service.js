@@ -1,193 +1,202 @@
 const axios = require('axios');
+const mongoose = require('mongoose');
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const getTelegramApiUrl = (method) => {
-  if (!TELEGRAM_BOT_TOKEN) {
-    throw new Error('Falta TELEGRAM_BOT_TOKEN en variables de entorno');
-  }
+  if (!TELEGRAM_BOT_TOKEN) throw new Error('Falta TELEGRAM_BOT_TOKEN');
   return `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/${method}`;
 };
 
-const buildMenu = () => ({
+// ─── MENÚ PRINCIPAL ───────────────────────────────────────────────
+const buildMenuPrincipal = () => ({
   inline_keyboard: [
     [
-      { text: '👤 Ver cliente', callback_data: 'ver_cliente' },
-      { text: '💳 Ver créditos', callback_data: 'ver_creditos' },
+      { text: '👥 Clientes', callback_data: 'menu_clientes' },
+      { text: '💳 Créditos', callback_data: 'menu_creditos' },
     ],
     [
-      { text: '💰 Registrar pago', callback_data: 'registrar_pago' },
-      { text: '📍 Mi ruta', callback_data: 'mi_ruta' },
+      { text: '💰 Registrar Pago', callback_data: 'menu_pago' },
+      { text: '📍 Mi Ruta Hoy', callback_data: 'menu_ruta' },
     ],
     [
-      { text: '📋 Abrir menú', callback_data: 'abrir_menu' },
+      { text: '📊 Mi Resumen', callback_data: 'menu_resumen' },
     ],
   ],
 });
 
+// ─── ENVIAR MENSAJE ───────────────────────────────────────────────
 const sendMessage = async (chatId, text, replyMarkup = null) => {
   try {
-    if (!chatId) throw new Error('chatId es requerido para sendMessage');
-
-    const safeText =
-      typeof text === 'string' && text.trim()
-        ? text.trim()
-        : 'Mensaje vacío';
-
+    if (!chatId) throw new Error('chatId requerido');
     const payload = {
       chat_id: chatId,
-      text: safeText,
+      text: typeof text === 'string' && text.trim() ? text.trim() : 'Mensaje vacío',
+      parse_mode: 'HTML',
     };
-
-    if (replyMarkup) {
-      payload.reply_markup = replyMarkup;
-    }
-
-    console.log('📤 Enviando mensaje a Telegram:', payload);
-
+    if (replyMarkup) payload.reply_markup = replyMarkup;
+    console.log('📤 sendMessage chatId:', chatId);
     const response = await axios.post(getTelegramApiUrl('sendMessage'), payload);
-
-    console.log('✅ Respuesta sendMessage:', response.data);
+    console.log('✅ sendMessage OK');
     return response.data;
   } catch (error) {
-    console.error('❌ Error sendMessage:', error.response?.data || error.message);
+    console.error('❌ sendMessage ERROR:', error.response?.data || error.message);
     throw error;
   }
 };
 
-const answerCallbackQuery = async (callbackQueryId, text = 'Procesado correctamente') => {
+// ─── RESPONDER CALLBACK ───────────────────────────────────────────
+const answerCallbackQuery = async (callbackQueryId, text = 'OK') => {
   try {
-    if (!callbackQueryId) throw new Error('callbackQueryId es requerido');
-
-    const payload = {
+    await axios.post(getTelegramApiUrl('answerCallbackQuery'), {
       callback_query_id: callbackQueryId,
       text,
       show_alert: false,
-    };
-
-    const response = await axios.post(
-      getTelegramApiUrl('answerCallbackQuery'),
-      payload
-    );
-
-    console.log('✅ answerCallbackQuery OK:', response.data);
-    return response.data;
+    });
   } catch (error) {
-    console.error('❌ Error answerCallbackQuery:', error.response?.data || error.message);
-    throw error;
+    console.error('❌ answerCallbackQuery ERROR:', error.response?.data || error.message);
   }
 };
 
-const sendMainMenu = async (chatId) => {
-  return sendMessage(
-    chatId,
-    '📋 Menú principal de Préstamos Chito.\n\nSelecciona una opción:',
-    buildMenu()
-  );
+// ─── BUSCAR COBRADOR POR TELEGRAM ID ─────────────────────────────
+const buscarCobrador = async (telegramId) => {
+  try {
+    const Cobrador = mongoose.model('Cobrador');
+    const cobrador = await Cobrador.findOne({ telegramId: String(telegramId) });
+    return cobrador;
+  } catch (error) {
+    console.error('❌ buscarCobrador ERROR:', error.message);
+    return null;
+  }
 };
 
+// ─── MENÚ PRINCIPAL TEXTO ─────────────────────────────────────────
+const enviarMenuPrincipal = async (chatId, nombreCobrador = 'Cobrador') => {
+  const hora = new Date().getHours();
+  let saludo = 'Buenas noches';
+  if (hora >= 5 && hora < 12) saludo = 'Buenos días';
+  else if (hora >= 12 && hora < 18) saludo = 'Buenas tardes';
+
+  const texto =
+    `🏦 <b>Préstamos Chito</b>\n` +
+    `${saludo}, <b>${nombreCobrador}</b>\n\n` +
+    `<b>📋 Menú Principal</b>\n\n` +
+    `👥 <b>Clientes</b> - Ver y gestionar tus clientes\n` +
+    `💳 <b>Créditos</b> - Ver todos los créditos activos\n` +
+    `💰 <b>Registrar Pago</b> - Registrar un cobro\n` +
+    `📍 <b>Mi Ruta Hoy</b> - Ver clientes a visitar\n` +
+    `📊 <b>Mi Resumen</b> - Estadísticas del día\n\n` +
+    `Selecciona una opción:`;
+
+  await sendMessage(chatId, texto, buildMenuPrincipal());
+};
+
+// ─── HANDLE MESSAGE ───────────────────────────────────────────────
 const handleMessage = async (message) => {
   try {
-    console.log('🔥 HANDLEMESSAGE EJECUTADO');
-    console.log('🔥 MESSAGE RAW:', JSON.stringify(message));
-
     const chatId = message?.chat?.id;
     const text = message?.text?.trim() || '';
     const lowerText = text.toLowerCase();
+    const telegramId = message?.from?.id;
+    const firstName = message?.from?.first_name || 'Cobrador';
 
-    console.log('🧾 handleMessage chatId:', chatId);
-    console.log('🧾 handleMessage text:', text);
+    console.log('🧾 handleMessage chatId:', chatId, 'text:', text);
 
-    if (!chatId) {
-      console.log('⚠️ handleMessage sin chatId');
-      return;
-    }
-
-    if (!text) {
-      await sendMessage(chatId, '⚠️ Solo puedo procesar mensajes de texto por ahora.');
-      return;
-    }
+    if (!chatId) return;
 
     if (text === '/start') {
-      await sendMessage(
-        chatId,
-        '¡Hola! Soy el bot de Préstamos Chito.\n\nEstoy activo y listo para ayudarte.'
-      );
-      await sendMainMenu(chatId);
+      const cobrador = await buscarCobrador(telegramId);
+      const nombre = cobrador?.nombre || firstName;
+      await enviarMenuPrincipal(chatId, nombre);
       return;
     }
 
     if (text === '/menu' || lowerText === 'menu' || lowerText === 'menú') {
-      await sendMainMenu(chatId);
+      const cobrador = await buscarCobrador(telegramId);
+      const nombre = cobrador?.nombre || firstName;
+      await enviarMenuPrincipal(chatId, nombre);
       return;
     }
 
     if (lowerText === 'hola') {
-      await sendMessage(chatId, '¡Hola! 👋 Estoy funcionando correctamente.');
-      await sendMainMenu(chatId);
+      await sendMessage(chatId, `¡Hola ${firstName}! 👋 Escribe /menu para ver las opciones.`);
       return;
     }
 
-    await sendMessage(chatId, `Recibí tu mensaje: "${text}".`);
-    await sendMainMenu(chatId);
+    await sendMessage(chatId, `No reconocí ese comando.\n\nEscribe /menu para ver las opciones disponibles.`);
   } catch (error) {
-    console.error('❌ Error handleMessage:', error.response?.data || error.message);
+    console.error('❌ handleMessage ERROR:', error.response?.data || error.message);
     throw error;
   }
 };
 
+// ─── HANDLE CALLBACK ──────────────────────────────────────────────
 const handleCallbackQuery = async (callbackQuery) => {
   try {
-    console.log('🔥 HANDLECALLBACKQUERY EJECUTADO');
-    console.log('🔥 CALLBACK RAW:', JSON.stringify(callbackQuery));
-
     const callbackQueryId = callbackQuery?.id;
     const data = callbackQuery?.data;
     const chatId = callbackQuery?.message?.chat?.id;
+    const telegramId = callbackQuery?.from?.id;
+    const firstName = callbackQuery?.from?.first_name || 'Cobrador';
 
-    console.log('🧾 handleCallbackQuery chatId:', chatId);
-    console.log('🧾 handleCallbackQuery data:', data);
+    console.log('🧾 handleCallbackQuery chatId:', chatId, 'data:', data);
 
-    if (callbackQueryId) {
-      await answerCallbackQuery(callbackQueryId, 'Opción recibida');
-    }
+    if (callbackQueryId) await answerCallbackQuery(callbackQueryId, 'Procesando...');
+    if (!chatId || !data) return;
 
-    if (!chatId || !data) {
-      console.log('⚠️ callbackQuery sin chatId o data');
-      return;
-    }
+    const cobrador = await buscarCobrador(telegramId);
+    const nombre = cobrador?.nombre || firstName;
 
     switch (data) {
-      case 'abrir_menu':
-        await sendMainMenu(chatId);
+      case 'menu_clientes':
+        await sendMessage(
+          chatId,
+          `👥 <b>Clientes</b>\n\nFunción en construcción.\n\nPronto podrás ver y gestionar tus clientes desde aquí.`
+        );
         break;
-      case 'ver_cliente':
-        await sendMessage(chatId, '👤 Función "Ver cliente" en construcción.');
+
+      case 'menu_creditos':
+        await sendMessage(
+          chatId,
+          `💳 <b>Créditos Activos</b>\n\nFunción en construcción.\n\nPronto podrás ver todos los créditos activos.`
+        );
         break;
-      case 'ver_creditos':
-        await sendMessage(chatId, '💳 Función "Ver créditos" en construcción.');
+
+      case 'menu_pago':
+        await sendMessage(
+          chatId,
+          `💰 <b>Registrar Pago</b>\n\nFunción en construcción.\n\nPronto podrás registrar cobros desde aquí.`
+        );
         break;
-      case 'registrar_pago':
-        await sendMessage(chatId, '💰 Función "Registrar pago" en construcción.');
+
+      case 'menu_ruta':
+        await sendMessage(
+          chatId,
+          `📍 <b>Mi Ruta Hoy</b>\n\nFunción en construcción.\n\nPronto verás los clientes a visitar hoy.`
+        );
         break;
-      case 'mi_ruta':
-        await sendMessage(chatId, '📍 Función "Mi ruta" en construcción.');
+
+      case 'menu_resumen':
+        await sendMessage(
+          chatId,
+          `📊 <b>Mi Resumen</b>\n\nFunción en construcción.\n\nPronto verás tus estadísticas del día.`
+        );
         break;
+
       default:
-        await sendMessage(chatId, '❓ No reconocí esa opción.');
-        await sendMainMenu(chatId);
+        await enviarMenuPrincipal(chatId, nombre);
         break;
     }
   } catch (error) {
-    console.error('❌ Error handleCallbackQuery:', error.response?.data || error.message);
+    console.error('❌ handleCallbackQuery ERROR:', error.response?.data || error.message);
     throw error;
   }
 };
 
 module.exports = {
   sendMessage,
-  sendMainMenu,
   handleMessage,
   handleCallbackQuery,
   answerCallbackQuery,
+  enviarMenuPrincipal,
 };
