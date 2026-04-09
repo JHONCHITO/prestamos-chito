@@ -10,7 +10,8 @@ const jwt = require('jsonwebtoken');
 const http = require('http');
 const socketIo = require('socket.io');
 
-const telegramRoutes = require('./src/telegram/telegram.routes');
+const telegramRoutes = require('./telegram/telegram.routes');
+
 
 const app = express();
 const server = http.createServer(app);
