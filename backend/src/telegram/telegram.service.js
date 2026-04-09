@@ -27,9 +27,7 @@ const buildMenu = () => ({
 
 const sendMessage = async (chatId, text, replyMarkup = null) => {
   try {
-    if (!chatId) {
-      throw new Error('chatId es requerido para sendMessage');
-    }
+    if (!chatId) throw new Error('chatId es requerido para sendMessage');
 
     const safeText =
       typeof text === 'string' && text.trim()
@@ -45,11 +43,7 @@ const sendMessage = async (chatId, text, replyMarkup = null) => {
       payload.reply_markup = replyMarkup;
     }
 
-    console.log('📤 Enviando mensaje a Telegram:', {
-      chat_id: payload.chat_id,
-      text: payload.text,
-      reply_markup: payload.reply_markup || null,
-    });
+    console.log('📤 Enviando mensaje a Telegram:', payload);
 
     const response = await axios.post(getTelegramApiUrl('sendMessage'), payload);
 
@@ -61,22 +55,15 @@ const sendMessage = async (chatId, text, replyMarkup = null) => {
   }
 };
 
-const answerCallbackQuery = async (
-  callbackQueryId,
-  text = 'Procesado correctamente'
-) => {
+const answerCallbackQuery = async (callbackQueryId, text = 'Procesado correctamente') => {
   try {
-    if (!callbackQueryId) {
-      throw new Error('callbackQueryId es requerido');
-    }
+    if (!callbackQueryId) throw new Error('callbackQueryId es requerido');
 
     const payload = {
       callback_query_id: callbackQueryId,
       text,
       show_alert: false,
     };
-
-    console.log('🖱️ Respondiendo callbackQuery:', payload);
 
     const response = await axios.post(
       getTelegramApiUrl('answerCallbackQuery'),
@@ -86,10 +73,7 @@ const answerCallbackQuery = async (
     console.log('✅ answerCallbackQuery OK:', response.data);
     return response.data;
   } catch (error) {
-    console.error(
-      '❌ Error answerCallbackQuery:',
-      error.response?.data || error.message
-    );
+    console.error('❌ Error answerCallbackQuery:', error.response?.data || error.message);
     throw error;
   }
 };
@@ -120,10 +104,7 @@ const handleMessage = async (message) => {
     }
 
     if (!text) {
-      await sendMessage(
-        chatId,
-        '⚠️ Solo puedo procesar mensajes de texto por ahora.'
-      );
+      await sendMessage(chatId, '⚠️ Solo puedo procesar mensajes de texto por ahora.');
       return;
     }
 
@@ -136,28 +117,18 @@ const handleMessage = async (message) => {
       return;
     }
 
-    if (
-      text === '/menu' ||
-      lowerText === 'menu' ||
-      lowerText === 'menú'
-    ) {
+    if (text === '/menu' || lowerText === 'menu' || lowerText === 'menú') {
       await sendMainMenu(chatId);
       return;
     }
 
     if (lowerText === 'hola') {
-      await sendMessage(
-        chatId,
-        '¡Hola! 👋 Estoy funcionando correctamente.'
-      );
+      await sendMessage(chatId, '¡Hola! 👋 Estoy funcionando correctamente.');
       await sendMainMenu(chatId);
       return;
     }
 
-    await sendMessage(
-      chatId,
-      `Recibí tu mensaje: "${text}".`
-    );
+    await sendMessage(chatId, `Recibí tu mensaje: "${text}".`);
     await sendMainMenu(chatId);
   } catch (error) {
     console.error('❌ Error handleMessage:', error.response?.data || error.message);
@@ -190,45 +161,25 @@ const handleCallbackQuery = async (callbackQuery) => {
       case 'abrir_menu':
         await sendMainMenu(chatId);
         break;
-
       case 'ver_cliente':
-        await sendMessage(
-          chatId,
-          '👤 Función "Ver cliente" en construcción.'
-        );
+        await sendMessage(chatId, '👤 Función "Ver cliente" en construcción.');
         break;
-
       case 'ver_creditos':
-        await sendMessage(
-          chatId,
-          '💳 Función "Ver créditos" en construcción.'
-        );
+        await sendMessage(chatId, '💳 Función "Ver créditos" en construcción.');
         break;
-
       case 'registrar_pago':
-        await sendMessage(
-          chatId,
-          '💰 Función "Registrar pago" en construcción.'
-        );
+        await sendMessage(chatId, '💰 Función "Registrar pago" en construcción.');
         break;
-
       case 'mi_ruta':
-        await sendMessage(
-          chatId,
-          '📍 Función "Mi ruta" en construcción.'
-        );
+        await sendMessage(chatId, '📍 Función "Mi ruta" en construcción.');
         break;
-
       default:
         await sendMessage(chatId, '❓ No reconocí esa opción.');
         await sendMainMenu(chatId);
         break;
     }
   } catch (error) {
-    console.error(
-      '❌ Error handleCallbackQuery:',
-      error.response?.data || error.message
-    );
+    console.error('❌ Error handleCallbackQuery:', error.response?.data || error.message);
     throw error;
   }
 };
