@@ -1,7 +1,8 @@
 import axios from 'axios';
 
-// 👉 Base URL del backend en producción
-const API_URL = process.env.REACT_APP_API_URL || 'https://prestamos-chito.vercel.app/api';
+// Base URL del backend
+const API_URL =
+  import.meta.env.VITE_API_URL || 'https://prestamos-chito-backend.onrender.com/api';
 
 console.log('📡 API URL Configurada:', API_URL);
 
@@ -13,36 +14,33 @@ const api = axios.create({
   }
 });
 
-// Interceptor para agregar token y tenantId (CORREGIDO)
+// Interceptor para agregar token y tenantId
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('admin_token');
     const tenantId = localStorage.getItem('tenantId');
-    
+
     console.log(`🚀 Petición: ${config.method?.toUpperCase()} ${config.url}`);
     console.log(`📡 Token: ${token ? '✅ Presente' : '❌ No'}`);
     console.log(`📡 TenantId desde localStorage: "${tenantId}"`);
-    
-    // Siempre agregar el token si existe
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    
-    // IMPORTANTE: Agregar tenantId para TODAS las rutas excepto auth
+
     if (tenantId && !config.url.includes('/auth/')) {
       config.headers['x-tenant-id'] = tenantId;
       console.log(`✅ Header x-tenant-id agregado: ${tenantId}`);
     } else if (!tenantId && !config.url.includes('/auth/')) {
       console.warn('⚠️ No hay tenantId en localStorage');
     }
-    
-    // Debug: Mostrar headers finales
+
     console.log('📋 Headers enviados:', {
       Authorization: config.headers.Authorization ? 'Bearer ***' : 'No',
       'x-tenant-id': config.headers['x-tenant-id'] || 'No',
       'Content-Type': config.headers['Content-Type']
     });
-    
+
     return config;
   },
   (error) => {
@@ -60,7 +58,7 @@ api.interceptors.response.use(
   (err) => {
     console.error(`❌ Error: ${err.response?.status}`, err.response?.config?.url);
     console.error('Detalle:', err.response?.data);
-    
+
     if (err.response?.status === 401) {
       console.log('🔐 Sesión expirada, redirigiendo al login...');
       localStorage.removeItem('admin_token');
@@ -68,7 +66,7 @@ api.interceptors.response.use(
       localStorage.removeItem('tenantId');
       window.location.href = '/';
     }
-    
+
     return Promise.reject(err);
   }
 );
