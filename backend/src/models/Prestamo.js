@@ -25,8 +25,8 @@ const prestamoSchema = new mongoose.Schema({
     set: v => Math.round(v * 100) / 100
   },
   totalAPagar: { 
-    type: Number, 
-    required: true,
+    type: Number,
+    default: 0,
     get: v => Math.round(v * 100) / 100,
     set: v => Math.round(v * 100) / 100
   },
@@ -73,9 +73,11 @@ const prestamoSchema = new mongoose.Schema({
   toObject: { getters: true }
 });
 
+
 // =========================
 // VIRTUALES
 // =========================
+
 
 // Calcular restante virtualmente
 prestamoSchema.virtual('restante').get(function() {
@@ -83,12 +85,14 @@ prestamoSchema.virtual('restante').get(function() {
   return Math.round(restante * 100) / 100;
 });
 
+
 // Calcular porcentaje pagado
 prestamoSchema.virtual('porcentajePagado').get(function() {
   if (this.totalAPagar === 0) return 0;
   const porcentaje = (this.totalPagado / this.totalAPagar) * 100;
   return Math.round(porcentaje * 100) / 100;
 });
+
 
 // =========================
 // NUEVO: CALCULAR CUOTA DIARIA
@@ -99,9 +103,11 @@ prestamoSchema.virtual('cuotaDiaria').get(function() {
   return Math.round(cuota * 100) / 100;
 });
 
+
 // =========================
 // MÉTODOS
 // =========================
+
 
 // Método para obtener saldo pendiente con precisión
 prestamoSchema.methods.getSaldoPendiente = function() {
@@ -109,10 +115,12 @@ prestamoSchema.methods.getSaldoPendiente = function() {
   return Math.round(saldo * 100) / 100;
 };
 
+
 // Método para verificar si está pagado
 prestamoSchema.methods.estaPagado = function() {
   return this.getSaldoPendiente() <= 0.01;
 };
+
 
 // NUEVO: Método para obtener la cuota diaria
 prestamoSchema.methods.getCuotaDiaria = function() {
@@ -120,6 +128,7 @@ prestamoSchema.methods.getCuotaDiaria = function() {
   const cuota = this.totalAPagar / this.numeroCuotas;
   return Math.round(cuota * 100) / 100;
 };
+
 
 // NUEVO: Método para calcular cuánto debería haberse pagado hasta la fecha
 prestamoSchema.methods.getPagoEsperadoHastaFecha = function() {
@@ -136,6 +145,7 @@ prestamoSchema.methods.getPagoEsperadoHastaFecha = function() {
   return Math.round(esperado * 100) / 100;
 };
 
+
 // NUEVO: Método para calcular días de atraso
 prestamoSchema.methods.getDiasAtraso = function() {
   const esperado = this.getPagoEsperadoHastaFecha();
@@ -148,9 +158,47 @@ prestamoSchema.methods.getDiasAtraso = function() {
   return atraso;
 };
 
+
+// =========================
+// NUEVO: PRE-VALIDATE
+// =========================
+
+
+// Calcular totalAPagar y fechaVencimiento antes de validar
+prestamoSchema.pre('validate', function(next) {
+  // Calcular totalAPagar si no existe
+  if ((!this.totalAPagar || this.totalAPagar === 0) && this.capital && this.interes) {
+    this.totalAPagar = Math.round(this.capital * (1 + this.interes / 100) * 100) / 100;
+  }
+  
+  // Calcular fecha de vencimiento si no existe
+  if (!this.fechaVencimiento && this.fechaInicio && this.numeroCuotas) {
+    const fecha = new Date(this.fechaInicio);
+    switch(this.frecuencia) {
+      case 'diario':
+        fecha.setDate(fecha.getDate() + this.numeroCuotas);
+        break;
+      case 'semanal':
+        fecha.setDate(fecha.getDate() + (this.numeroCuotas * 7));
+        break;
+      case 'quincenal':
+        fecha.setDate(fecha.getDate() + (this.numeroCuotas * 15));
+        break;
+      case 'mensual':
+        fecha.setMonth(fecha.getMonth() + this.numeroCuotas);
+        break;
+    }
+    this.fechaVencimiento = fecha;
+  }
+  
+  next();
+});
+
+
 // =========================
 // MIDDLEWARE PRE-SAVE
 // =========================
+
 
 // Calcular totalAPagar antes de guardar si no se proporciona
 prestamoSchema.pre('save', function(next) {
@@ -194,9 +242,12 @@ prestamoSchema.pre('save', function(next) {
   next();
 });
 
+
 prestamoSchema.set('toJSON', { virtuals: true });
 prestamoSchema.set('toObject', { virtuals: true });
 
+
 const Prestamo = mongoose.models.Prestamo || mongoose.model('Prestamo', prestamoSchema);
+
 
 module.exports = Prestamo;
