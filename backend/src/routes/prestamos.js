@@ -178,20 +178,32 @@ router.post('/', authMiddleware, async (req, res) => {
   try {
     console.log('BODY QUE LLEGA A /prestamos:', req.body);
 
-    const { clienteId, capital, interes, numeroCuotas, frecuencia, notas } = req.body;
+    // Aceptar capital con varios nombres posibles: capital, monto, amount
+    const {
+      clienteId,
+      capital: capitalRaw,
+      monto: montoRaw,
+      amount: amountRaw,
+      interes,
+      numeroCuotas,
+      frecuencia,
+      notas
+    } = req.body;
+
+    const capitalInput = capitalRaw ?? montoRaw ?? amountRaw;
 
     // Validar que vengan clienteId y capital
     if (!clienteId) {
       return res.status(400).json({ error: 'clienteId es obligatorio' });
     }
 
-    if (capital === undefined || capital === null || capital === '') {
+    if (capitalInput === undefined || capitalInput === null || capitalInput === '') {
       return res.status(400).json({ error: 'capital es obligatorio' });
     }
 
     // Limpiar y convertir capital a número
     const capitalNumber = Number(
-      String(capital)
+      String(capitalInput)
         .replace(/\./g, '')
         .replace(/,/g, '.')
         .replace(/\$/g, '')
