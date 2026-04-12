@@ -2,8 +2,9 @@ const express = require('express');
 const router = express.Router();
 const Prestamo = require('../models/Prestamo');
 const Cliente = require('../models/Cliente');
-const Pago = require('../models/Pago'); // <--- AGREGADO
+const Pago = require('../models/Pago');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
+
 
 // Middleware para verificar tenantId
 router.use((req, res, next) => {
@@ -12,6 +13,7 @@ router.use((req, res, next) => {
   }
   next();
 });
+
 
 // GET todos los préstamos
 router.get('/', authMiddleware, async (req, res) => {
@@ -30,7 +32,6 @@ router.get('/', authMiddleware, async (req, res) => {
       .populate('cobrador', 'nombre cedula')
       .sort({ createdAt: -1 });
 
-    // Calcular saldo pendiente para cada préstamo
     const result = prestamos.map(p => ({
       ...p.toObject(),
       saldoPendiente: p.totalAPagar - (p.totalPagado || 0),
@@ -50,6 +51,7 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
+
 // GET préstamos de un cliente específico
 router.get('/cliente/:clienteId', authMiddleware, async (req, res) => {
   try {
@@ -61,7 +63,6 @@ router.get('/cliente/:clienteId', authMiddleware, async (req, res) => {
     .populate('cobrador', 'nombre cedula')
     .sort({ createdAt: -1 });
     
-    // Calcular saldo pendiente
     const result = prestamos.map(p => ({
       ...p.toObject(),
       saldoPendiente: p.totalAPagar - (p.totalPagado || 0),
@@ -75,6 +76,7 @@ router.get('/cliente/:clienteId', authMiddleware, async (req, res) => {
   }
 });
 
+
 // GET préstamo por ID
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
@@ -87,7 +89,6 @@ router.get('/:id', authMiddleware, async (req, res) => {
     
     if (!prestamo) return res.status(404).json({ error: 'Préstamo no encontrado' });
     
-    // Obtener pagos del préstamo
     const pagos = await Pago.find({ 
       prestamoId: req.params.id,
       tenantId: req.tenantId 
@@ -105,7 +106,8 @@ router.get('/:id', authMiddleware, async (req, res) => {
   }
 });
 
-// ===== NUEVA RUTA: GET pagos de un préstamo específico =====
+
+// GET pagos de un préstamo específico
 router.get('/:id/pagos', authMiddleware, async (req, res) => {
   try {
     const pagos = await Pago.find({ 
@@ -122,7 +124,8 @@ router.get('/:id/pagos', authMiddleware, async (req, res) => {
   }
 });
 
-// ===== NUEVA RUTA: GET resumen de pagos para dashboard =====
+
+// GET resumen de pagos para dashboard
 router.get('/pagos/resumen', authMiddleware, async (req, res) => {
   try {
     const hoy = new Date();
@@ -130,7 +133,6 @@ router.get('/pagos/resumen', authMiddleware, async (req, res) => {
     const manana = new Date(hoy);
     manana.setDate(manana.getDate() + 1);
     
-    // Pagos de hoy
     const pagosHoy = await Pago.find({
       tenantId: req.tenantId,
       fecha: { $gte: hoy, $lt: manana }
@@ -138,7 +140,6 @@ router.get('/pagos/resumen', authMiddleware, async (req, res) => {
     
     const totalHoy = pagosHoy.reduce((sum, p) => sum + p.monto, 0);
     
-    // Pagos del mes
     const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
     const finMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
     finMes.setHours(23, 59, 59, 999);
@@ -171,29 +172,63 @@ router.get('/pagos/resumen', authMiddleware, async (req, res) => {
   }
 });
 
+
 // POST crear préstamo
 router.post('/', authMiddleware, async (req, res) => {
   try {
+    console.log('BODY QUE LLEGA A /prestamos:', req.body);
+
     const { clienteId, capital, interes, numeroCuotas, frecuencia, notas } = req.body;
-    
-    const totalAPagar = Math.round(capital * (1 + interes / 100));
-    
-    // Calcular fecha vencimiento
+
+    // Validar que vengan clienteId y capital
+    if (!clienteId) {
+      return res.status(400).json({ error: 'clienteId es obligatorio' });
+    }
+
+    if (capital === undefined || capital === null || capital === '') {
+      return res.status(400).json({ error: 'capital es obligatorio' });
+    }
+
+    // Limpiar y convertir capital a número
+    const capitalNumber = Number(
+      String(capital)
+        .replace(/\./g, '')
+        .replace(/,/g, '.')
+        .replace(/\$/g, '')
+        .trim()
+    );
+
+    if (!capitalNumber || isNaN(capitalNumber)) {
+      return res.status(400).json({ error: 'capital inválido' });
+    }
+
+    const interesNumber = interes ? Number(interes) : 20;
+    const cuotasNumber = numeroCuotas ? Number(numeroCuotas) : 30;
+
+    const totalAPagar = Math.round(capitalNumber * (1 + interesNumber / 100));
+
+    // Calcular fechas
     const fechaInicio = new Date();
     let fechaVencimiento = new Date(fechaInicio);
-    if (frecuencia === 'diario') fechaVencimiento.setDate(fechaVencimiento.getDate() + numeroCuotas);
-    else if (frecuencia === 'semanal') fechaVencimiento.setDate(fechaVencimiento.getDate() + numeroCuotas * 7);
-    else if (frecuencia === 'quincenal') fechaVencimiento.setDate(fechaVencimiento.getDate() + numeroCuotas * 15);
-    else fechaVencimiento.setMonth(fechaVencimiento.getMonth() + numeroCuotas);
+
+    if (frecuencia === 'semanal') {
+      fechaVencimiento.setDate(fechaVencimiento.getDate() + cuotasNumber * 7);
+    } else if (frecuencia === 'quincenal') {
+      fechaVencimiento.setDate(fechaVencimiento.getDate() + cuotasNumber * 15);
+    } else if (frecuencia === 'mensual') {
+      fechaVencimiento.setMonth(fechaVencimiento.getMonth() + cuotasNumber);
+    } else {
+      // diario por defecto
+      fechaVencimiento.setDate(fechaVencimiento.getDate() + cuotasNumber);
+    }
 
     // Determinar cobrador
     let cobradorId = req.user.id;
     if (req.user.rol === 'admin' && req.body.cobradorId) {
       cobradorId = req.body.cobradorId;
     }
-    
+
     if (req.user.rol === 'cobrador') {
-      // Verificar que el cliente pertenece a este cobrador
       const cliente = await Cliente.findOne({ 
         _id: clienteId, 
         tenantId: req.tenantId 
@@ -207,10 +242,10 @@ router.post('/', authMiddleware, async (req, res) => {
     const prestamo = new Prestamo({
       cliente: clienteId,
       cobrador: cobradorId,
-      capital,
-      interes,
+      capital: capitalNumber,
+      interes: interesNumber,
       totalAPagar,
-      numeroCuotas,
+      numeroCuotas: cuotasNumber,
       frecuencia: frecuencia || 'diario',
       fechaInicio,
       fechaVencimiento,
@@ -221,6 +256,7 @@ router.post('/', authMiddleware, async (req, res) => {
     });
 
     await prestamo.save();
+
     const populated = await prestamo.populate([
       { path: 'cliente', select: 'nombre cedula' },
       { path: 'cobrador', select: 'nombre cedula' }
@@ -232,6 +268,7 @@ router.post('/', authMiddleware, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // PUT actualizar préstamo (solo admin)
 router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
@@ -252,5 +289,6 @@ router.put('/:id', authMiddleware, adminOnly, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 module.exports = router;
