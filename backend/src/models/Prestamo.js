@@ -12,8 +12,8 @@ const prestamoSchema = new mongoose.Schema({
     required: true 
   },
   capital: { 
-    type: Number, 
-    required: true,
+    type: Number,
+    default: 0,
     get: v => Math.round(v * 100) / 100,
     set: v => Math.round(v * 100) / 100
   },
@@ -73,64 +73,40 @@ const prestamoSchema = new mongoose.Schema({
   toObject: { getters: true }
 });
 
-
-// =========================
 // VIRTUALES
-// =========================
-
-
-// Calcular restante virtualmente
 prestamoSchema.virtual('restante').get(function() {
   const restante = this.totalAPagar - this.totalPagado;
   return Math.round(restante * 100) / 100;
 });
 
-
-// Calcular porcentaje pagado
 prestamoSchema.virtual('porcentajePagado').get(function() {
   if (this.totalAPagar === 0) return 0;
   const porcentaje = (this.totalPagado / this.totalAPagar) * 100;
   return Math.round(porcentaje * 100) / 100;
 });
 
-
-// =========================
-// NUEVO: CALCULAR CUOTA DIARIA
-// =========================
 prestamoSchema.virtual('cuotaDiaria').get(function() {
   if (!this.numeroCuotas || this.numeroCuotas === 0) return 0;
   const cuota = this.totalAPagar / this.numeroCuotas;
   return Math.round(cuota * 100) / 100;
 });
 
-
-// =========================
 // MÉTODOS
-// =========================
-
-
-// Método para obtener saldo pendiente con precisión
 prestamoSchema.methods.getSaldoPendiente = function() {
   const saldo = this.totalAPagar - this.totalPagado;
   return Math.round(saldo * 100) / 100;
 };
 
-
-// Método para verificar si está pagado
 prestamoSchema.methods.estaPagado = function() {
   return this.getSaldoPendiente() <= 0.01;
 };
 
-
-// NUEVO: Método para obtener la cuota diaria
 prestamoSchema.methods.getCuotaDiaria = function() {
   if (!this.numeroCuotas || this.numeroCuotas === 0) return 0;
   const cuota = this.totalAPagar / this.numeroCuotas;
   return Math.round(cuota * 100) / 100;
 };
 
-
-// NUEVO: Método para calcular cuánto debería haberse pagado hasta la fecha
 prestamoSchema.methods.getPagoEsperadoHastaFecha = function() {
   if (!this.fechaInicio || !this.numeroCuotas) return 0;
   
@@ -145,8 +121,6 @@ prestamoSchema.methods.getPagoEsperadoHastaFecha = function() {
   return Math.round(esperado * 100) / 100;
 };
 
-
-// NUEVO: Método para calcular días de atraso
 prestamoSchema.methods.getDiasAtraso = function() {
   const esperado = this.getPagoEsperadoHastaFecha();
   const pagado = this.totalPagado || 0;
@@ -158,20 +132,12 @@ prestamoSchema.methods.getDiasAtraso = function() {
   return atraso;
 };
 
-
-// =========================
-// NUEVO: PRE-VALIDATE
-// =========================
-
-
-// Calcular totalAPagar y fechaVencimiento antes de validar
+// PRE-VALIDATE
 prestamoSchema.pre('validate', function(next) {
-  // Calcular totalAPagar si no existe
   if ((!this.totalAPagar || this.totalAPagar === 0) && this.capital && this.interes) {
     this.totalAPagar = Math.round(this.capital * (1 + this.interes / 100) * 100) / 100;
   }
   
-  // Calcular fecha de vencimiento si no existe
   if (!this.fechaVencimiento && this.fechaInicio && this.numeroCuotas) {
     const fecha = new Date(this.fechaInicio);
     switch(this.frecuencia) {
@@ -194,20 +160,12 @@ prestamoSchema.pre('validate', function(next) {
   next();
 });
 
-
-// =========================
-// MIDDLEWARE PRE-SAVE
-// =========================
-
-
-// Calcular totalAPagar antes de guardar si no se proporciona
+// PRE-SAVE
 prestamoSchema.pre('save', function(next) {
-  // Calcular totalAPagar si no existe
   if (!this.totalAPagar && this.capital && this.interes) {
     this.totalAPagar = Math.round(this.capital * (1 + this.interes / 100) * 100) / 100;
   }
   
-  // Calcular fecha de vencimiento si no existe
   if (!this.fechaVencimiento && this.fechaInicio && this.numeroCuotas) {
     const fecha = new Date(this.fechaInicio);
     switch(this.frecuencia) {
@@ -227,13 +185,11 @@ prestamoSchema.pre('save', function(next) {
     this.fechaVencimiento = fecha;
   }
   
-  // Redondear todos los números a 2 decimales
   if (this.capital) this.capital = Math.round(this.capital * 100) / 100;
   if (this.interes) this.interes = Math.round(this.interes * 100) / 100;
   if (this.totalAPagar) this.totalAPagar = Math.round(this.totalAPagar * 100) / 100;
   if (this.totalPagado) this.totalPagado = Math.round(this.totalPagado * 100) / 100;
   
-  // Actualizar estado si está pagado
   if (this.getSaldoPendiente() <= 0.01) {
     this.estado = 'pagado';
     this.totalPagado = this.totalAPagar;
@@ -242,12 +198,9 @@ prestamoSchema.pre('save', function(next) {
   next();
 });
 
-
 prestamoSchema.set('toJSON', { virtuals: true });
 prestamoSchema.set('toObject', { virtuals: true });
 
-
 const Prestamo = mongoose.models.Prestamo || mongoose.model('Prestamo', prestamoSchema);
-
 
 module.exports = Prestamo;
