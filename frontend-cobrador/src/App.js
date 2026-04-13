@@ -13,18 +13,34 @@ function App() {
 
   useEffect(() => {
     const stored = localStorage.getItem('cobrador_user');
-    if (stored) setUser(JSON.parse(stored));
+    if (stored) {
+      try {
+        const parsedUser = JSON.parse(stored);
+        setUser(parsedUser);
+
+        if (parsedUser?.tenantId && !localStorage.getItem('tenantId')) {
+          localStorage.setItem('tenantId', parsedUser.tenantId);
+        }
+      } catch (error) {
+        console.error('Error restaurando sesion del cobrador:', error);
+        localStorage.removeItem('cobrador_user');
+      }
+    }
   }, []);
 
   const handleLogin = (userData, token) => {
     localStorage.setItem('cobrador_token', token);
     localStorage.setItem('cobrador_user', JSON.stringify(userData));
+    if (userData?.tenantId) {
+      localStorage.setItem('tenantId', userData.tenantId);
+    }
     setUser(userData);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('cobrador_token');
     localStorage.removeItem('cobrador_user');
+    localStorage.removeItem('tenantId');
     setUser(null);
   };
 

@@ -30,10 +30,11 @@ router.post('/', verificarToken, async (req, res) => {
   try {
     const { prestamoId, monto, metodoPago, referencia } = req.body;
     const tenantId = req.usuario.tenantId;
+    const montoNumero = Number(monto);
     
     console.log('💰 Registrando pago de préstamo:', { prestamoId, monto, metodoPago });
     
-    if (!prestamoId || !monto) {
+    if (!prestamoId || !montoNumero || Number.isNaN(montoNumero)) {
       return res.status(400).json({ error: 'Faltan datos requeridos' });
     }
     
@@ -54,7 +55,7 @@ router.post('/', verificarToken, async (req, res) => {
     }
     
     // Calcular nuevo total pagado
-    const nuevoTotalPagado = (prestamo.totalPagado || 0) + monto;
+    const nuevoTotalPagado = (prestamo.totalPagado || 0) + montoNumero;
     
     // Actualizar estado del préstamo
     let nuevoEstado = prestamo.estado;
@@ -72,8 +73,8 @@ router.post('/', verificarToken, async (req, res) => {
     // Registrar pago
     const nuevoPago = new Pago({
       prestamoId,
-      clienteId: prestamo.clienteId,
-      monto,
+      clienteId: prestamo.cliente,
+      monto: montoNumero,
       metodoPago: metodoPago || 'efectivo',
       referencia: referencia || '',
       fecha: new Date(),

@@ -16,7 +16,6 @@ export default function Login({ onLogin }) {
     setError("");
     try {
       const res = await authAPI.cobradorLogin(usuario, password);
-      localStorage.setItem("cobrador_token", res.data.token);
       onLogin(res.data.user, res.data.token);
     } catch (err) {
       setError(err.response?.data?.error || "Error al iniciar sesion");
