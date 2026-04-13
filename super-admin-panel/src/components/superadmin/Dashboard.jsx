@@ -1,48 +1,54 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  Card, 
-  Row, 
-  Col, 
-  Statistic, 
-  Spin, 
-  Alert, 
-  Typography, 
-  Button, 
-  Space
+import React, { useEffect, useState } from 'react';
+import {
+  Alert,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Progress,
+  Row,
+  Space,
+  Spin,
+  Statistic,
+  Table,
+  Tag,
+  Typography,
 } from 'antd';
-import { 
-  ShopOutlined, 
-  UserOutlined, 
-  DollarOutlined, 
-  TeamOutlined,
-  FileTextOutlined,
+import {
+  ArrowRightOutlined,
+  BankOutlined,
   CheckCircleOutlined,
-  CloseCircleOutlined,
-  WarningOutlined
+  ClockCircleOutlined,
+  DollarOutlined,
+  ReloadOutlined,
+  ShopOutlined,
+  TeamOutlined,
+  UserOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip as RechartsTooltip, 
-  Legend, 
-  PieChart, 
-  Pie, 
-  Cell,
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  LineChart,
-  Line
-} from 'recharts';
-import { getSuperAdminStats } from '../../api/superadmin';
+import { getOficinas, getSuperAdminStats } from '../../api/superadmin';
 
 const { Title, Text } = Typography;
 
+const currencyFormatter = new Intl.NumberFormat('es-CO', {
+  style: 'currency',
+  currency: 'COP',
+  maximumFractionDigits: 0,
+});
+
+const numberFormatter = new Intl.NumberFormat('es-CO');
+
+const surfaceStyle = {
+  borderRadius: 20,
+  border: '1px solid #d9e2ec',
+  boxShadow: '0 18px 40px rgba(15, 23, 42, 0.06)',
+};
+
+const getOfficeStatusColor = (estado) => (estado ? 'green' : 'default');
+
 const Dashboard = ({ notificaciones = [] }) => {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [stats, setStats] = useState({
     oficinas: 0,
     clientes: 0,
@@ -51,407 +57,400 @@ const Dashboard = ({ notificaciones = [] }) => {
     carteraTotal: 0,
     prestamosActivos: 0,
     prestamosPagados: 0,
-    prestamosVencidos: 0
+    prestamosVencidos: 0,
   });
-  const [error, setError] = useState(null);
+  const [oficinas, setOficinas] = useState([]);
 
   useEffect(() => {
-    cargarEstadisticas();
+    cargarDashboard();
   }, []);
 
-  const cargarEstadisticas = async () => {
+  const cargarDashboard = async () => {
     try {
       setLoading(true);
-      const data = await getSuperAdminStats();
-      setStats(data);
+      setError(null);
+
+      const [statsData, oficinasData] = await Promise.all([
+        getSuperAdminStats(),
+        getOficinas(),
+      ]);
+
+      setStats(statsData || {});
+      setOficinas(Array.isArray(oficinasData) ? oficinasData : []);
     } catch (err) {
-      setError(err.message);
+      setError(err.response?.data?.error || err.message || 'No se pudo cargar el dashboard');
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) return (
-    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '400px' }}>
-      <Spin size="large" tip="Cargando estadísticas galácticas..." />
-    </div>
-  );
-  
-  if (error) return <Alert message="Error" description={error} type="error" showIcon />;
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: 420,
+        }}
+      >
+        <Spin size="large" tip="Cargando resumen ejecutivo..." />
+      </div>
+    );
+  }
 
-  const prestamosData = [
-    { name: 'Activos', value: stats.prestamosActivos, color: '#52c41a' },
-    { name: 'Pagados', value: stats.prestamosPagados, color: '#1890ff' },
-    { name: 'Vencidos', value: stats.prestamosVencidos, color: '#892716' }
+  if (error) {
+    return (
+      <Alert
+        message="No se pudo cargar el dashboard"
+        description={error}
+        type="error"
+        showIcon
+      />
+    );
+  }
+
+  const oficinasActivas = oficinas.filter((oficina) => oficina.estado).length;
+  const oficinasInactivas = oficinas.length - oficinasActivas;
+  const carteraPromedio = stats.oficinas
+    ? Math.round((stats.carteraTotal || 0) / stats.oficinas)
+    : 0;
+  const clientesPorCobrador = stats.cobradores
+    ? (stats.clientes / stats.cobradores).toFixed(1)
+    : '0.0';
+  const morosidad = stats.prestamos
+    ? Math.round((stats.prestamosVencidos / stats.prestamos) * 100)
+    : 0;
+  const recuperacion = stats.prestamos
+    ? Math.round((stats.prestamosPagados / stats.prestamos) * 100)
+    : 0;
+
+  const kpis = [
+    {
+      title: 'Oficinas operando',
+      value: stats.oficinas,
+      icon: <BankOutlined style={{ color: '#0f766e' }} />,
+      detail: `${oficinasActivas} activas`,
+    },
+    {
+      title: 'Cartera vigente',
+      value: currencyFormatter.format(stats.carteraTotal || 0),
+      icon: <DollarOutlined style={{ color: '#1d4ed8' }} />,
+      detail: `Promedio ${currencyFormatter.format(carteraPromedio)} por oficina`,
+    },
+    {
+      title: 'Préstamos activos',
+      value: numberFormatter.format(stats.prestamosActivos || 0),
+      icon: <ClockCircleOutlined style={{ color: '#9a3412' }} />,
+      detail: `${numberFormatter.format(stats.prestamos || 0)} préstamos registrados`,
+    },
+    {
+      title: 'Clientes atendidos',
+      value: numberFormatter.format(stats.clientes || 0),
+      icon: <UserOutlined style={{ color: '#475569' }} />,
+      detail: `${clientesPorCobrador} clientes por cobrador`,
+    },
   ];
 
-  const distribucionData = [
-    { name: 'Oficinas', cantidad: stats.oficinas },
-    { name: 'Cobradores', cantidad: stats.cobradores },
-    { name: 'Clientes', cantidad: stats.clientes },
-    { name: 'Préstamos', cantidad: stats.prestamos }
+  const healthCards = [
+    {
+      title: 'Recuperación de cartera',
+      value: `${recuperacion}%`,
+      extra: `${numberFormatter.format(stats.prestamosPagados || 0)} préstamos pagados`,
+      tone: '#0f766e',
+      progressStroke: '#0f766e',
+      progressTrail: '#d1fae5',
+    },
+    {
+      title: 'Riesgo de mora',
+      value: `${morosidad}%`,
+      extra: `${numberFormatter.format(stats.prestamosVencidos || 0)} préstamos vencidos`,
+      tone: morosidad > 15 ? '#b91c1c' : '#9a3412',
+      progressStroke: morosidad > 15 ? '#dc2626' : '#f59e0b',
+      progressTrail: morosidad > 15 ? '#fee2e2' : '#fef3c7',
+    },
+    {
+      title: 'Cobertura de campo',
+      value: numberFormatter.format(stats.cobradores || 0),
+      extra: `${numberFormatter.format(stats.clientes || 0)} clientes en gestión`,
+      tone: '#334155',
+      progressStroke: '#334155',
+      progressTrail: '#e2e8f0',
+    },
   ];
 
-  const trendData = [
-    { mes: 'Ene', prestamos: 4, cobros: 3 },
-    { mes: 'Feb', prestamos: 6, cobros: 4 },
-    { mes: 'Mar', prestamos: 8, cobros: 6 },
-    { mes: 'Abr', prestamos: 12, cobros: 9 },
-    { mes: 'May', prestamos: 10, cobros: 8 },
-    { mes: 'Jun', prestamos: 15, cobros: 12 },
+  const columnasOficinas = [
+    {
+      title: 'Oficina',
+      dataIndex: 'nombre',
+      key: 'nombre',
+      render: (_, record) => (
+        <div>
+          <div style={{ fontWeight: 600, color: '#0f172a' }}>{record.nombre}</div>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {record.tenantId}
+          </Text>
+        </div>
+      ),
+    },
+    {
+      title: 'Estado',
+      dataIndex: 'estado',
+      key: 'estado',
+      width: 120,
+      render: (estado) => (
+        <Tag color={getOfficeStatusColor(estado)} style={{ borderRadius: 999 }}>
+          {estado ? 'Activa' : 'Inactiva'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Creación',
+      dataIndex: 'fechaCreacion',
+      key: 'fechaCreacion',
+      width: 160,
+      render: (value) =>
+        value
+          ? new Date(value).toLocaleDateString('es-CO', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+            })
+          : 'Sin fecha',
+    },
   ];
 
   return (
     <div>
-      <div style={{ marginBottom: 32 }}>
-        <Title level={2} style={{ 
-          background: 'linear-gradient(135deg, #f77987, #6a84db)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          marginBottom: 8
-        }}>
-          Panel de Control super-admin-chito
-        </Title>
-        <Text type="secondary">Bienvenido al sistema de administrador chito galáctico</Text>
-      </div>
-
-      {notificaciones.length > 0 && (
-        <div style={{ 
-          marginBottom: 16, 
-          padding: '8px 16px', 
-          background: 'rgba(255,77,79,0.1)', 
-          borderRadius: 8,
-          borderLeft: '3px solid #ff4d4f'
-        }}>
-          <Space>
-            <WarningOutlined style={{ color: '#ff4d4f' }} />
-            <Text type="secondary">
-              {notificaciones.length} empresa{notificaciones.length > 1 ? 's' : ''} con pagos pendientes.
-              <Button type="link" size="small" onClick={() => window.location.href = '/superadmin/reportes'}>
-                Ver detalles →
-              </Button>
+      <Card
+        style={{
+          ...surfaceStyle,
+          marginBottom: 24,
+          background:
+            'linear-gradient(135deg, #f8fafc 0%, #eef2f7 45%, #e2e8f0 100%)',
+        }}
+        styles={{ body: { padding: 28 } }}
+      >
+        <Row gutter={[24, 24]} align="middle">
+          <Col xs={24} lg={16}>
+            <Tag
+              bordered={false}
+              style={{
+                marginBottom: 14,
+                padding: '6px 12px',
+                borderRadius: 999,
+                color: '#0f172a',
+                background: '#dbeafe',
+                fontWeight: 600,
+              }}
+            >
+              Vista ejecutiva
+            </Tag>
+            <Title level={2} style={{ margin: 0, color: '#0f172a' }}>
+              Resumen general del negocio
+            </Title>
+            <Text style={{ display: 'block', marginTop: 10, color: '#475569', fontSize: 15 }}>
+              Este panel concentra el estado actual de oficinas, cartera y operación de campo
+              para que el superadmin vea rápido dónde intervenir.
             </Text>
-          </Space>
-        </div>
-      )}
+          </Col>
+          <Col xs={24} lg={8}>
+            <div
+              style={{
+                height: '100%',
+                padding: 20,
+                borderRadius: 18,
+                background: 'rgba(255, 255, 255, 0.78)',
+                border: '1px solid #dbe3ec',
+              }}
+            >
+              <Text style={{ color: '#64748b', fontSize: 13 }}>Alertas de seguimiento</Text>
+              <div style={{ marginTop: 8, fontSize: 34, fontWeight: 700, color: '#0f172a' }}>
+                {notificaciones.length}
+              </div>
+              <Text style={{ color: '#475569' }}>
+                {notificaciones.length === 1
+                  ? 'empresa con pago pendiente'
+                  : 'empresas con pago pendiente'}
+              </Text>
+              <div style={{ marginTop: 18 }}>
+                <Button
+                  icon={<ReloadOutlined />}
+                  onClick={cargarDashboard}
+                  style={{
+                    borderRadius: 10,
+                    borderColor: '#cbd5e1',
+                    color: '#0f172a',
+                    fontWeight: 600,
+                  }}
+                >
+                  Actualizar datos
+                </Button>
+              </div>
+            </div>
+          </Col>
+        </Row>
+      </Card>
 
-      {/* Tarjetas de estadísticas */}
-      <Row gutter={[24, 24]}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card" style={{ borderRadius: 16 }}>
-            <Statistic
-              title="Oficinas"
-              value={stats.oficinas}
-              prefix={<ShopOutlined />}
-              styles={{ content: { color: '#00d4ff', fontWeight: 'bold' } }}
+      <Row gutter={[20, 20]}>
+        {kpis.map((item) => (
+          <Col xs={24} sm={12} xl={6} key={item.title}>
+            <Card style={surfaceStyle} styles={{ body: { padding: 22 } }}>
+              <Space size={14} align="start">
+                <div
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 14,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    fontSize: 20,
+                  }}
+                >
+                  {item.icon}
+                </div>
+                <div>
+                  <Text style={{ color: '#64748b', fontSize: 13 }}>{item.title}</Text>
+                  <div style={{ marginTop: 6, fontSize: 28, fontWeight: 700, color: '#0f172a' }}>
+                    {item.value}
+                  </div>
+                  <Text style={{ color: '#475569', fontSize: 13 }}>{item.detail}</Text>
+                </div>
+              </Space>
+            </Card>
+          </Col>
+        ))}
+      </Row>
+
+      <Row gutter={[20, 20]} style={{ marginTop: 4 }}>
+        {healthCards.map((card) => (
+          <Col xs={24} lg={8} key={card.title}>
+            <Card style={surfaceStyle} styles={{ body: { padding: 24 } }}>
+              <Text style={{ color: '#64748b', fontSize: 13 }}>{card.title}</Text>
+              <div style={{ marginTop: 10, fontSize: 30, fontWeight: 700, color: card.tone }}>
+                {card.value}
+              </div>
+              <Text style={{ color: '#475569' }}>{card.extra}</Text>
+              <Progress
+                percent={card.title === 'Cobertura de campo' ? Math.min(stats.cobradores * 10, 100) : Number.parseInt(card.value, 10)}
+                showInfo={false}
+                strokeColor={card.progressStroke}
+                trailColor={card.progressTrail}
+                style={{ marginTop: 18 }}
+              />
+            </Card>
+          </Col>
+        ))}
+      </Row>
+
+      <Row gutter={[20, 20]} style={{ marginTop: 4 }}>
+        <Col xs={24} xl={15}>
+          <Card
+            title={<span style={{ color: '#0f172a', fontWeight: 700 }}>Estado de oficinas</span>}
+            style={surfaceStyle}
+            extra={
+              <Text style={{ color: '#64748b' }}>
+                {oficinasActivas} activas / {oficinasInactivas} inactivas
+              </Text>
+            }
+            styles={{ body: { paddingTop: 12 } }}
+          >
+            <Table
+              dataSource={oficinas.slice(0, 6)}
+              columns={columnasOficinas}
+              rowKey={(record) => record._id}
+              pagination={false}
+              locale={{ emptyText: 'Aún no hay oficinas registradas' }}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card" style={{ borderRadius: 16 }}>
+
+        <Col xs={24} xl={9}>
+          <Card
+            title={<span style={{ color: '#0f172a', fontWeight: 700 }}>Alertas y enfoque</span>}
+            style={surfaceStyle}
+            styles={{ body: { padding: 24 } }}
+          >
+            {notificaciones.length > 0 ? (
+              <Space direction="vertical" size={14} style={{ width: '100%' }}>
+                {notificaciones.slice(0, 4).map((empresa) => (
+                  <div
+                    key={empresa.id || empresa.tenantId}
+                    style={{
+                      padding: 16,
+                      borderRadius: 16,
+                      background: '#fff7ed',
+                      border: '1px solid #fed7aa',
+                    }}
+                  >
+                    <Space align="start">
+                      <WarningOutlined style={{ color: '#c2410c', fontSize: 18, marginTop: 4 }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: '#7c2d12' }}>{empresa.nombre}</div>
+                        <Text style={{ color: '#9a3412', fontSize: 13 }}>
+                          {empresa.diasAtraso} días de atraso · vence {empresa.fechaVencimiento}
+                        </Text>
+                        <div style={{ marginTop: 8, color: '#7c2d12', fontWeight: 600 }}>
+                          Pendiente {currencyFormatter.format(empresa.montoPendiente || 0)}
+                        </div>
+                      </div>
+                    </Space>
+                  </div>
+                ))}
+              </Space>
+            ) : (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="No hay alertas pendientes en este momento"
+              />
+            )}
+          </Card>
+        </Col>
+      </Row>
+
+      <Row gutter={[20, 20]} style={{ marginTop: 4 }}>
+        <Col xs={24} md={12} xl={6}>
+          <Card style={surfaceStyle} styles={{ body: { padding: 22 } }}>
+            <Statistic
+              title="Préstamos vencidos"
+              value={stats.prestamosVencidos}
+              prefix={<WarningOutlined style={{ color: '#b91c1c' }} />}
+              valueStyle={{ color: '#0f172a', fontWeight: 700 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={12} xl={6}>
+          <Card style={surfaceStyle} styles={{ body: { padding: 22 } }}>
+            <Statistic
+              title="Préstamos pagados"
+              value={stats.prestamosPagados}
+              prefix={<CheckCircleOutlined style={{ color: '#0f766e' }} />}
+              valueStyle={{ color: '#0f172a', fontWeight: 700 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} md={12} xl={6}>
+          <Card style={surfaceStyle} styles={{ body: { padding: 22 } }}>
             <Statistic
               title="Cobradores"
               value={stats.cobradores}
-              prefix={<TeamOutlined />}
-              styles={{ content: { color: '#2c40bf', fontWeight: 'bold' } }}
+              prefix={<TeamOutlined style={{ color: '#334155' }} />}
+              valueStyle={{ color: '#0f172a', fontWeight: 700 }}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card" style={{ borderRadius: 16 }}>
+        <Col xs={24} md={12} xl={6}>
+          <Card style={surfaceStyle} styles={{ body: { padding: 22 } }}>
             <Statistic
-              title="Clientes"
-              value={stats.clientes}
-              prefix={<UserOutlined />}
-              styles={{ content: { color: '#5e0656', fontWeight: 'bold' } }}
+              title="Clientes por oficina"
+              value={stats.oficinas ? (stats.clientes / stats.oficinas).toFixed(1) : 0}
+              prefix={<ShopOutlined style={{ color: '#1d4ed8' }} />}
+              suffix={<ArrowRightOutlined style={{ color: '#94a3b8', fontSize: 14 }} />}
+              valueStyle={{ color: '#0f172a', fontWeight: 700 }}
             />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card" style={{ borderRadius: 16 }}>
-            <Statistic
-              title="Préstamos Totales"
-              value={stats.prestamos}
-              prefix={<FileTextOutlined />}
-              styles={{ content: { color: '#fa1634', fontWeight: 'bold' } }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      {/* Segunda fila */}
-      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-        <Col xs={24} sm={12} lg={8}>
-          <Card title="Cartera Total" className="stat-card" style={{ borderRadius: 16 }}>
-            <Statistic
-              value={stats.carteraTotal}
-              precision={2}
-              prefix={<DollarOutlined />}
-              suffix="COP"
-              styles={{ content: { color: '#cf1322', fontSize: '28px', fontWeight: 'bold' } }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card title="Préstamos Activos" className="stat-card" style={{ borderRadius: 16 }}>
-            <Statistic
-              value={stats.prestamosActivos}
-              prefix={<CheckCircleOutlined />}
-              styles={{ content: { color: '#35850e', fontWeight: 'bold' } }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={8}>
-          <Card title="Préstamos Vencidos" className="stat-card" style={{ borderRadius: 16 }}>
-            <Statistic
-              value={stats.prestamosVencidos}
-              prefix={<CloseCircleOutlined />}
-              styles={{ content: { color: '#f5222d', fontWeight: 'bold' } }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      {/* Gráficos – NUEVA INTERFAZ */}
-      {/* Fila 1: Barras horizontales + Área apilada */}
-      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-        {/* Barras horizontales: Distribución de Préstamos */}
-        <Col xs={24} lg={12}>
-          <Card
-            title="Distribución de Préstamos"
-            style={{ borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
-          >
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart
-                data={prestamosData}
-                layout="vertical"
-                margin={{ top: 10, right: 10, left: 40, bottom: 10 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(0,0,0,0.06)"
-                  horizontal={false}
-                  vertical
-                />
-                <XAxis
-                  type="number"
-                  tick={{ fontSize: 12, fill: '#595959' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  type="category"
-                  dataKey="name"
-                  tick={{ fontSize: 12, fill: '#595959' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <RechartsTooltip
-                  formatter={(value, name) => [`${value}`, name]}
-                  contentStyle={{
-                    borderRadius: 8,
-                    border: '1px solid #773c3c',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#9f4e4e' }} />
-                <Bar
-                  dataKey="value"
-                  name="Cantidad"
-                  radius={[8, 8, 8, 8]}
-                >
-                  {prestamosData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-
-        {/* Área apilada: Préstamos vs Cobros */}
-        <Col xs={24} lg={12}>
-          <Card
-            title="Préstamos vs Cobros (Acumulado)"
-            style={{ borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
-          >
-            <ResponsiveContainer width="100%" height={280}>
-              <AreaChart
-                data={trendData}
-                margin={{ top: 10, right: 10, left: 0, bottom: 10 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(0,0,0,0.06)"
-                  horizontal
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="mes"
-                  tick={{ fontSize: 12, fill: '#553939' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 12, fill: '#5c0909' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <RechartsTooltip
-                  formatter={(value, name) => {
-                    const label = name === 'prestamos' ? 'Préstamos' : 'Cobros';
-                    return [value, label];
-                  }}
-                  contentStyle={{
-                    borderRadius: 8,
-                    border: '1px solid #3a4b5a',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#595959' }} />
-                <defs>
-                  <linearGradient id="areaPrestamos" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#141a83" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="#00d4ff" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="areaCobros" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0b1365" stopOpacity={0.8} />
-                    <stop offset="95%" stopColor="#52c41a" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <Area
-                  type="monotone"
-                  dataKey="prestamos"
-                  name="Préstamos"
-                  stroke="#3f11bf"
-                  strokeWidth={2}
-                  fill="url(#areaPrestamos)"
-                  stackId="1"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="cobros"
-                  name="Cobros"
-                  stroke="#bc59a8"
-                  strokeWidth={2}
-                  fill="url(#areaCobros)"
-                  stackId="1"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-      </Row>
-
-      {/* Fila 2: Líneas suaves + Barras agrupadas */}
-      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
-        {/* Líneas suaves: Préstamos y Cobros */}
-        <Col xs={24} lg={12}>
-          <Card
-            title="Tendencia Detallada"
-            style={{ borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
-          >
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart
-                data={trendData}
-                margin={{ top: 10, right: 10, left: 0, bottom: 10 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(0,0,0,0.06)"
-                  horizontal
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="mes"
-                  tick={{ fontSize: 12, fill: '#4f1a1a' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 12, fill: '#711d1d' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <RechartsTooltip
-                  formatter={(value, name) => {
-                    const label = name === 'cobros' ? 'Cobros' : 'Préstamos';
-                    return [value, label];
-                  }}
-                  contentStyle={{
-                    borderRadius: 8,
-                    border: '1px solid #9f2727',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#595959' }} />
-                <Line
-                  type="monotone"
-                  dataKey="prestamos"
-                  name="Préstamos"
-                  stroke="#0b5b6b"
-                  strokeWidth={3}
-                  dot={{ r: 4, fill: '#1b0b93' }}
-                  activeDot={{ r: 6 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="cobros"
-                  name="Cobros"
-                  stroke="#ddf05c"
-                  strokeWidth={2}
-                  dot={{ r: 4, fill: '#1a64c4' }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-
-        {/* Barras agrupadas: Distribución General */}
-        <Col xs={24} lg={12}>
-          <Card
-            title="Distribución General"
-            style={{ borderRadius: 16, boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
-          >
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart
-                data={distribucionData}
-                margin={{ top: 10, right: 10, left: 0, bottom: 10 }}
-              >
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(0,0,0,0.06)"
-                  horizontal
-                  vertical={false}
-                />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fontSize: 12, fill: '#595959' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 12, fill: '#595959' }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <RechartsTooltip
-                  formatter={(value) => [`${value}`, 'Cantidad']}
-                  contentStyle={{
-                    borderRadius: 8,
-                    border: '1px solid #e8e8e8',
-                    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12, color: '#595959' }} />
-                <Bar
-                  dataKey="cantidad"
-                  name="Cantidad"
-                  fill="#1db7e6"
-                  radius={[6, 6, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
           </Card>
         </Col>
       </Row>
