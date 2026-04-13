@@ -173,7 +173,10 @@ router.post('/cobrador/login', async (req, res) => {
         nombre: user.nombre,
         email: user.email,
         rol: 'cobrador',
-        tenantId: user.tenantId
+        tenantId: user.tenantId,
+        cedula: user.cedula,
+        telefono: user.telefono,
+        zona: user.zona
       }
     });
     

@@ -179,6 +179,7 @@ exports.cobradorLogin = async (req, res) => {
         email: cobrador.email,
         rol: 'cobrador',
         tenantId: cobrador.tenantId,
+        cedula: cobrador.cedula,
         telefono: cobrador.telefono,
         zona: cobrador.zona
       }
