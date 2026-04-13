@@ -42,6 +42,12 @@ const cobradorSchema = new mongoose.Schema({
     trim: true
   },
 
+  telegramId: {
+    type: String,
+    default: '',
+    trim: true
+  },
+
   sedeId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Sede",

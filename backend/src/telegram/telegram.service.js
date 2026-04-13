@@ -8,6 +8,7 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 // ─── SESIONES EN MEMORIA ──────────────────────────────────────────
 const sesiones = {};
+const autenticaciones = {};
 
 const getSesion = (chatId) => {
   if (!sesiones[chatId]) sesiones[chatId] = { paso: null, data: {} };
@@ -17,6 +18,16 @@ const getSesion = (chatId) => {
 const resetSesion = (chatId) => {
   sesiones[chatId] = { paso: null, data: {} };
 };
+
+const setAutenticacion = (chatId, cobrador) => {
+  autenticaciones[chatId] = cobrador._id.toString();
+};
+
+const clearAutenticacion = (chatId) => {
+  delete autenticaciones[chatId];
+};
+
+const getAutenticacion = (chatId) => autenticaciones[chatId] || null;
 
 // ─── API TELEGRAM ─────────────────────────────────────────────────
 const getTelegramApiUrl = (method) => {
@@ -67,6 +78,23 @@ const buscarCobrador = async (telegramId) => {
   }
 };
 
+const obtenerCobrador = async (chatId, telegramId) => {
+  try {
+    const autenticadoId = getAutenticacion(chatId);
+
+    if (autenticadoId) {
+      const cobradorAutenticado = await Cobrador.findById(autenticadoId);
+      if (cobradorAutenticado) return cobradorAutenticado;
+      clearAutenticacion(chatId);
+    }
+
+    return await buscarCobrador(telegramId);
+  } catch (e) {
+    console.error('❌ obtenerCobrador ERROR:', e.message);
+    return null;
+  }
+};
+
 // ─── MENÚS ────────────────────────────────────────────────────────
 const menuPrincipal = () => ({
   inline_keyboard: [
@@ -99,6 +127,75 @@ const enviarMenuPrincipal = async (chatId, nombre = 'Cobrador') => {
     `🏦 <b>Préstamos Chito</b>\n${saludo}, <b>${nombre}</b>\n\n<b>📋 Menú Principal</b>\n\nSelecciona una opción:`,
     menuPrincipal()
   );
+};
+
+const iniciarLoginCobrador = async (chatId) => {
+  resetSesion(chatId);
+  getSesion(chatId).paso = 'login_email';
+
+  await sendMessage(
+    chatId,
+    '🔐 <b>Ingreso de Cobrador</b>\n\nEscribe el <b>correo</b> del cobrador con el que quieres entrar:',
+    menuCancelar()
+  );
+};
+
+const continuarLoginCobrador = async (chatId, texto) => {
+  const sesion = getSesion(chatId);
+
+  if (sesion.paso === 'login_email') {
+    const email = String(texto || '').trim().toLowerCase();
+
+    if (!email.includes('@')) {
+      await sendMessage(chatId, '⚠️ Escribe un correo válido del cobrador:');
+      return true;
+    }
+
+    sesion.data.email = email;
+    sesion.paso = 'login_password';
+    await sendMessage(chatId, '🔑 Ahora escribe la <b>contraseña</b> del cobrador:', menuCancelar());
+    return true;
+  }
+
+  if (sesion.paso === 'login_password') {
+    const email = sesion.data.email;
+    const password = String(texto || '').trim();
+
+    const cobrador = await Cobrador.findOne({ email });
+
+    if (!cobrador) {
+      await sendMessage(chatId, '❌ No encontré un cobrador con ese correo.\n\nIntenta de nuevo con /login');
+      resetSesion(chatId);
+      return true;
+    }
+
+    const passwordValida = await cobrador.comparePassword(password);
+
+    if (!passwordValida) {
+      await sendMessage(chatId, '❌ Contraseña incorrecta.\n\nIntenta de nuevo con /login');
+      resetSesion(chatId);
+      return true;
+    }
+
+    if (cobrador.estado?.toLowerCase() !== 'activo') {
+      await sendMessage(chatId, '❌ Ese cobrador está inactivo.');
+      resetSesion(chatId);
+      return true;
+    }
+
+    setAutenticacion(chatId, cobrador);
+    resetSesion(chatId);
+
+    await sendMessage(
+      chatId,
+      `✅ <b>Sesión iniciada</b>\n\n👤 ${cobrador.nombre}\n🏢 ${cobrador.tenantId}\n📧 ${cobrador.email}`
+    );
+
+    await enviarMenuPrincipal(chatId, cobrador.nombre || 'Cobrador');
+    return true;
+  }
+
+  return false;
 };
 
 // ════════════════════════════════════════════════════════════════════
@@ -220,7 +317,11 @@ const continuarCrearCredito = async (chatId, texto, cobrador) => {
   const sesion = getSesion(chatId);
 
   if (sesion.paso === 'credito_cedula') {
-    const cliente = await Cliente.findOne({ cedula: texto, tenantId: cobrador.tenantId });
+    const cliente = await Cliente.findOne({
+      cedula: texto,
+      tenantId: cobrador.tenantId,
+      cobrador: cobrador._id,
+    });
     if (!cliente) {
       await sendMessage(chatId, `⚠️ No encontré un cliente con cédula <b>${texto}</b>.\n\nVerifica e intenta de nuevo:`);
       return true;
@@ -321,13 +422,12 @@ const confirmarCrearCredito = async (chatId, cobrador) => {
       cliente: d.clienteId,
       cobrador: cobrador._id,
       tenantId: cobrador.tenantId,
-      monto: d.capital,
-      capitalInicial: d.capital,
+      capital: d.capital,
       interes: d.interes,
-      totalPagar: d.totalAPagar,
-      saldoPendiente: d.totalAPagar,
+      totalAPagar: d.totalAPagar,
+      totalPagado: 0,
       numeroCuotas: d.cuotas,
-      valorCuota: d.cuotaValor,
+      frecuencia: 'diario',
       estado: 'activo',
       fechaInicio: new Date(),
     });
@@ -363,14 +463,22 @@ const iniciarConsultarCliente = async (chatId) => {
 };
 
 const consultarCliente = async (chatId, cedula, cobrador) => {
-  const cliente = await Cliente.findOne({ cedula, tenantId: cobrador.tenantId });
+  const cliente = await Cliente.findOne({
+    cedula,
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  });
 
   if (!cliente) {
     await sendMessage(chatId, `⚠️ No encontré un cliente con cédula <b>${cedula}</b>.`);
     return;
   }
 
-  const prestamos = await Prestamo.find({ cliente: cliente._id }).sort({ createdAt: -1 }).limit(5);
+  const prestamos = await Prestamo.find({
+    cliente: cliente._id,
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  }).sort({ createdAt: -1 }).limit(5);
 
   let texto = `👤 <b>${cliente.nombre}</b>\n🪪 ${cliente.cedula}\n📱 ${cliente.celular || 'Sin celular'}\n🏠 ${cliente.direccion || 'Sin dirección'}\n\n`;
 
@@ -379,7 +487,8 @@ const consultarCliente = async (chatId, cedula, cobrador) => {
   } else {
     texto += '<b>Últimos créditos:</b>\n';
     prestamos.forEach((p, i) => {
-      texto += `\n${i + 1}. $${Number(p.monto || 0).toLocaleString('es-CO')} - Estado: ${p.estado || 'N/D'}`;
+      const saldoPendiente = Math.max(0, Number(p.totalAPagar || 0) - Number(p.totalPagado || 0));
+      texto += `\n${i + 1}. $${Number(p.capital || 0).toLocaleString('es-CO')} - Estado: ${p.estado || 'N/D'} - Saldo: $${saldoPendiente.toLocaleString('es-CO')}`;
     });
   }
 
@@ -406,7 +515,11 @@ const continuarRegistrarPago = async (chatId, texto, cobrador) => {
   const sesion = getSesion(chatId);
 
   if (sesion.paso === 'pago_cedula') {
-    const cliente = await Cliente.findOne({ cedula: texto, tenantId: cobrador.tenantId });
+    const cliente = await Cliente.findOne({
+      cedula: texto,
+      tenantId: cobrador.tenantId,
+      cobrador: cobrador._id,
+    });
     if (!cliente) {
       await sendMessage(chatId, `⚠️ No encontré un cliente con cédula <b>${texto}</b>.`);
       return true;
@@ -428,9 +541,11 @@ const continuarRegistrarPago = async (chatId, texto, cobrador) => {
     sesion.data.prestamoId = prestamo._id;
     sesion.paso = 'pago_monto';
 
+    const saldoPendiente = Math.max(0, Number(prestamo.totalAPagar || 0) - Number(prestamo.totalPagado || 0));
+
     await sendMessage(
       chatId,
-      `✅ Cliente: <b>${cliente.nombre}</b>\n💳 Saldo pendiente: <b>$${Number(prestamo.saldoPendiente || 0).toLocaleString('es-CO')}</b>\n\nEscribe el <b>monto del pago</b>:`,
+      `✅ Cliente: <b>${cliente.nombre}</b>\n💳 Saldo pendiente: <b>$${saldoPendiente.toLocaleString('es-CO')}</b>\n\nEscribe el <b>monto del pago</b>:`,
       menuCancelar()
     );
     return true;
@@ -475,28 +590,48 @@ const confirmarPago = async (chatId, cobrador) => {
       return;
     }
 
+    const saldoPendienteAnterior = Math.max(
+      0,
+      Number(prestamo.totalAPagar || 0) - Number(prestamo.totalPagado || 0)
+    );
+
+    if (Number(d.monto) > saldoPendienteAnterior) {
+      await sendMessage(
+        chatId,
+        `⚠️ El pago supera el saldo pendiente actual ($${saldoPendienteAnterior.toLocaleString('es-CO')}).`
+      );
+      resetSesion(chatId);
+      await enviarMenuPrincipal(chatId, cobrador.nombre);
+      return;
+    }
+
     const pago = new Pago({
       prestamoId: prestamo._id,
       clienteId: d.clienteId,
       tenantId: cobrador.tenantId,
-      tenantNombre: cobrador.tenantNombre || '',
       monto: d.monto,
       metodoPago: 'efectivo',
-      fechaPago: new Date(),
+      fecha: new Date(),
       registradoPor: cobrador._id,
+      registradoPorTipo: 'cobrador',
     });
 
     await pago.save();
 
-    prestamo.saldoPendiente = Math.max(0, Number(prestamo.saldoPendiente || 0) - Number(d.monto));
-    if (prestamo.saldoPendiente <= 0) prestamo.estado = 'pagado';
+    prestamo.totalPagado = Math.max(0, Number(prestamo.totalPagado || 0) + Number(d.monto));
+    if (prestamo.totalPagado >= Number(prestamo.totalAPagar || 0)) prestamo.estado = 'pagado';
     await prestamo.save();
+
+    const saldoPendienteNuevo = Math.max(
+      0,
+      Number(prestamo.totalAPagar || 0) - Number(prestamo.totalPagado || 0)
+    );
 
     resetSesion(chatId);
 
     await sendMessage(
       chatId,
-      `✅ <b>Pago registrado correctamente</b>\n\n👤 ${d.clienteNombre}\n💵 $${Number(d.monto).toLocaleString('es-CO')}\n💳 Nuevo saldo: $${Number(prestamo.saldoPendiente).toLocaleString('es-CO')}`
+      `✅ <b>Pago registrado correctamente</b>\n\n👤 ${d.clienteNombre}\n💵 $${Number(d.monto).toLocaleString('es-CO')}\n💳 Nuevo saldo: $${saldoPendienteNuevo.toLocaleString('es-CO')}`
     );
 
     await enviarMenuPrincipal(chatId, cobrador.nombre);
@@ -525,28 +660,54 @@ const handleMessage = async (message) => {
       return;
     }
 
-    const cobrador = await buscarCobrador(telegramUserId);
+    const sesion = getSesion(chatId);
 
-    if (!cobrador) {
-      await sendMessage(
-        chatId,
-        '⚠️ Tu usuario de Telegram no está vinculado a ningún cobrador.\n\nSolicita al administrador que registre tu Telegram ID.'
-      );
+    if (text === '/login') {
+      await iniciarLoginCobrador(chatId);
       return;
     }
 
-    const sesion = getSesion(chatId);
     const lowerText = text.toLowerCase();
+
+    if (text === '/logout' || text === '/salir') {
+      clearAutenticacion(chatId);
+      resetSesion(chatId);
+      await sendMessage(chatId, '🔒 Sesión cerrada.\n\nUsa /login para entrar con otro cobrador.');
+      return;
+    }
+
+    if (sesion.paso?.startsWith('login_')) {
+      const handled = await continuarLoginCobrador(chatId, text);
+      if (handled) return;
+    }
+
+    const cobrador = await obtenerCobrador(chatId, telegramUserId);
 
     if (text === '/start') {
       resetSesion(chatId);
+      if (!cobrador) {
+        await iniciarLoginCobrador(chatId);
+        return;
+      }
       await enviarMenuPrincipal(chatId, cobrador.nombre || 'Cobrador');
       return;
     }
 
     if (text === '/menu' || lowerText === 'menu' || lowerText === 'menú') {
+      if (!cobrador) {
+        await iniciarLoginCobrador(chatId);
+        return;
+      }
       resetSesion(chatId);
       await enviarMenuPrincipal(chatId, cobrador.nombre || 'Cobrador');
+      return;
+    }
+
+    if (!cobrador) {
+      await sendMessage(
+        chatId,
+        '⚠️ Este chat no tiene un cobrador activo.\n\nUsa /login para entrar con el correo y la contraseña del cobrador, o vincula tu Telegram ID.'
+      );
       return;
     }
 
@@ -601,13 +762,10 @@ const handleCallbackQuery = async (callbackQuery) => {
 
     if (!chatId || !data) return;
 
-    const cobrador = await buscarCobrador(telegramUserId);
+    const cobrador = await obtenerCobrador(chatId, telegramUserId);
 
     if (!cobrador) {
-      await sendMessage(
-        chatId,
-        '⚠️ Tu usuario de Telegram no está vinculado a ningún cobrador.'
-      );
+      await iniciarLoginCobrador(chatId);
       return;
     }
 
@@ -653,13 +811,19 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
     if (data === 'menu_clientes') {
-      const total = await Cliente.countDocuments({ tenantId: cobrador.tenantId });
+      const total = await Cliente.countDocuments({
+        tenantId: cobrador.tenantId,
+        cobrador: cobrador._id,
+      });
       await sendMessage(chatId, `👥 Tienes <b>${total}</b> clientes registrados.`);
       return;
     }
 
     if (data === 'menu_creditos') {
-      const total = await Prestamo.countDocuments({ tenantId: cobrador.tenantId });
+      const total = await Prestamo.countDocuments({
+        tenantId: cobrador.tenantId,
+        cobrador: cobrador._id,
+      });
       await sendMessage(chatId, `💳 Tienes <b>${total}</b> créditos registrados.`);
       return;
     }
