@@ -1,6 +1,6 @@
 // src/pages/Cartera.jsx
 import React, { useState, useEffect } from 'react';
-import { carteraAPI } from '../services/cartera';
+import { carteraAPI } from '../api/api';
 import { formatMoney } from '../utils/formatters';
 
 export default function Cartera() {

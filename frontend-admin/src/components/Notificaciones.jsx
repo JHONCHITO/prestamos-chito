@@ -22,13 +22,18 @@ const Notificaciones = () => {
     console.log('🏢 Conectando con tenantId:', tenantId);
 
     // Conectar al servidor WebSocket
-    const newSocket = io('https://prestamos-chito.vercel.app', {
-      transports: ['polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      timeout: 10000
-    });
+    const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL ||
+  import.meta.env.VITE_API_URL?.replace('/api', '') ||
+  'https://prestamos-chito-backend.onrender.com';
+
+const newSocket = io(SOCKET_URL, {
+  transports: ['polling', 'websocket'],
+  reconnection: true,
+  reconnectionAttempts: 5,
+  reconnectionDelay: 1000,
+  timeout: 10000
+});
 
     newSocket.on('connect', () => {
       console.log('✅ Conectado al servidor de notificaciones');
