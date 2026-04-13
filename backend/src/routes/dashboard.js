@@ -38,6 +38,7 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
     const totalRecaudado = prestamos.reduce((sum, p) => sum + p.totalPagado, 0);
     const porCobrar = carteraTotal - totalRecaudado;
     const prestamosActivos = prestamos.filter(p => p.estado === 'activo').length;
+    const prestamosVencidos = prestamos.filter(p => p.estado === 'vencido').length;
     
     // =========================
     // 🔥 NUEVO: CÁLCULO DE GANANCIAS TOTALES
@@ -134,14 +135,23 @@ router.get('/', authMiddleware, adminOnly, async (req, res) => {
 
     res.json({
       stats: {
-        cobradores,
-        clientes,
         carteraTotal,
+        totalCartera: carteraTotal,
         totalRecaudado,
         porCobrar,
         prestamosActivos,
+        prestamosPagados: prestamosPagados.length,
+        prestamosVencidos,
+        cobradores,
+        totalCobradores: cobradores,
+        clientes,
+        totalClientes: clientes,
+        totalPrestamos: prestamos.length,
+        cobradores,
+        clientes,
         // 🔥 NUEVAS MÉTRICAS DE GANANCIAS
         gananciasTotales,
+        interesGenerado: gananciasTotales,
         gananciasRealizadas,
         gananciasPorCobrar,
         tasaGanancia

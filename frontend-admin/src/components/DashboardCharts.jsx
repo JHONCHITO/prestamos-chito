@@ -54,15 +54,15 @@ const DashboardCharts = () => {
   const ultimosPrestamos = dashboardData?.ultimosPrestamos || [];
   const cobradoresRecientes = dashboardData?.cobradoresRecientes || [];
 
-  const totalCartera = stats.totalCartera || 0;
+  const totalCartera = stats.carteraTotal ?? stats.totalCartera ?? 0;
   const totalRecaudado = stats.totalRecaudado || 0;
-  const porCobrar = totalCartera - totalRecaudado;
+  const porCobrar = stats.porCobrar ?? (totalCartera - totalRecaudado);
   const porcentajeCobro = totalCartera > 0 ? (totalRecaudado / totalCartera) * 100 : 0;
 
   const prestamosColumns = [
-    { title: 'Cliente', dataIndex: ['cliente', 'nombre'], key: 'cliente', render: (_, record) => record.cliente?.nombre || 'N/A' },
+    { title: 'Cliente', dataIndex: 'cliente', key: 'cliente', render: (val) => val || 'N/A' },
     { title: 'Capital', dataIndex: 'capital', key: 'capital', render: (val) => `$${val?.toLocaleString() || 0}` },
-    { title: 'Total', dataIndex: 'total', key: 'total', render: (val) => `$${val?.toLocaleString() || 0}` },
+    { title: 'Total', dataIndex: 'totalAPagar', key: 'totalAPagar', render: (val) => `$${val?.toLocaleString() || 0}` },
     { 
       title: 'Estado', 
       dataIndex: 'estado', 
@@ -122,8 +122,8 @@ const DashboardCharts = () => {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="Interés Generado" value={stats.interesGenerado || 0} precision={0} prefix={<WalletOutlined />} valueStyle={{ color: '#7b2cbf' }} suffix="COP" />
-            <Tag color="processing">ROI: {totalCartera > 0 ? ((stats.interesGenerado / totalCartera) * 100).toFixed(2) : 0}%</Tag>
+            <Statistic title="Interés Generado" value={stats.interesGenerado || stats.gananciasTotales || 0} precision={0} prefix={<WalletOutlined />} valueStyle={{ color: '#7b2cbf' }} suffix="COP" />
+            <Tag color="processing">ROI: {totalCartera > 0 ? (((stats.interesGenerado || stats.gananciasTotales || 0) / totalCartera) * 100).toFixed(2) : 0}%</Tag>
           </Card>
         </Col>
       </Row>
@@ -139,13 +139,13 @@ const DashboardCharts = () => {
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="Total Clientes" value={stats.totalClientes || 0} prefix={<UserOutlined />} />
+            <Statistic title="Total Clientes" value={stats.totalClientes ?? stats.clientes ?? 0} prefix={<UserOutlined />} />
             <Button type="link" style={{ marginTop: 8, padding: 0 }} onClick={() => navigate('/clientes')}>Gestionar clientes →</Button>
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card>
-            <Statistic title="Total Cobradores" value={stats.totalCobradores || 0} prefix={<TeamOutlined />} />
+            <Statistic title="Total Cobradores" value={stats.totalCobradores ?? stats.cobradores ?? 0} prefix={<TeamOutlined />} />
             <Button type="link" style={{ marginTop: 8, padding: 0 }} onClick={() => navigate('/cobradores')}>Gestionar cobradores →</Button>
           </Card>
         </Col>
