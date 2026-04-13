@@ -9,11 +9,41 @@ const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const http = require('http');
 const socketIo = require('socket.io');
+const Pago = require('./models/Pago');
 
 const telegramRoutes = require('./telegram/telegram.routes');
 
 const app = express();
 const server = http.createServer(app);
+
+const ensurePagoIndexes = async () => {
+  try {
+    const collection = mongoose.connection.collection('pagos');
+    const indexes = await collection.indexes();
+    const legacyIndex = indexes.find(index => index.name === 'tenantId_1_año_1_mes_1');
+
+    if (legacyIndex) {
+      await collection.dropIndex('tenantId_1_año_1_mes_1');
+      console.log('🧹 Índice legacy de pagos eliminado');
+    }
+
+    await Pago.collection.createIndex(
+      { tenantId: 1, año: 1, mes: 1 },
+      {
+        name: 'tenantId_1_año_1_mes_1',
+        unique: true,
+        partialFilterExpression: {
+          año: { $exists: true },
+          mes: { $exists: true }
+        }
+      }
+    );
+
+    console.log('✅ Índice de pagos asegurado correctamente');
+  } catch (error) {
+    console.error('❌ Error asegurando índices de pagos:', error.message);
+  }
+};
 
 // ✅ LISTA COMPLETA DE ORÍGENES PERMITIDOS
 const allowedOrigins = [
@@ -250,7 +280,10 @@ app.use('*', (req, res) => {
 
 /* MONGO CONNECT */
 mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('✅ MongoDB conectado'))
+  .then(async () => {
+    console.log('✅ MongoDB conectado');
+    await ensurePagoIndexes();
+  })
   .catch(err => {
     console.log('❌ Error MongoDB:', err.message);
     process.exit(1);

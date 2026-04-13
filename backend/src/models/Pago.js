@@ -70,7 +70,18 @@ const pagoSchema = new mongoose.Schema({
 // Índices para búsquedas rápidas
 pagoSchema.index({ prestamoId: 1 });
 pagoSchema.index({ clienteId: 1 });
-pagoSchema.index({ tenantId: 1, año: 1, mes: 1 }, { unique: true, sparse: true });
+// Este índice único solo aplica a pagos mensuales de oficina.
+// Los pagos de préstamos no incluyen año/mes y no deben chocar entre sí.
+pagoSchema.index(
+  { tenantId: 1, año: 1, mes: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      año: { $exists: true },
+      mes: { $exists: true }
+    }
+  }
+);
 pagoSchema.index({ fecha: -1 });
 
 module.exports = mongoose.model('Pago', pagoSchema);
