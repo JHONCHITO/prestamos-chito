@@ -60,6 +60,8 @@ export const authAPI = {
   adminLogin: (email, password) =>
     api.post('/auth/admin/login', { email, password }),
 
+  me: () => api.get('/auth/me'),
+
   logout: () => api.post('/auth/logout')
 };
 

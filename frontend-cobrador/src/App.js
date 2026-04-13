@@ -7,13 +7,18 @@ import ClienteDetalle from './pages/ClienteDetalle';
 import Creditos from './pages/Creditos';
 import NuevoCredito from './pages/NuevoCredito';
 import PagarCredito from './pages/PagarCredito';
+import { authAPI } from './services/api';
 
 function App() {
   const [user, setUser] = useState(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem('cobrador_user');
-    if (stored) {
+    const restaurarSesion = async () => {
+      const stored = localStorage.getItem('cobrador_user');
+      const token = localStorage.getItem('cobrador_token');
+
+      if (!stored) return;
+
       try {
         const parsedUser = JSON.parse(stored);
         setUser(parsedUser);
@@ -21,11 +26,26 @@ function App() {
         if (parsedUser?.tenantId && !localStorage.getItem('tenantId')) {
           localStorage.setItem('tenantId', parsedUser.tenantId);
         }
+
+        if (token && !parsedUser?.cedula) {
+          const response = await authAPI.me();
+          const refreshedUser = response.data?.user;
+
+          if (refreshedUser) {
+            localStorage.setItem('cobrador_user', JSON.stringify(refreshedUser));
+            if (refreshedUser?.tenantId) {
+              localStorage.setItem('tenantId', refreshedUser.tenantId);
+            }
+            setUser(refreshedUser);
+          }
+        }
       } catch (error) {
         console.error('Error restaurando sesion del cobrador:', error);
         localStorage.removeItem('cobrador_user');
       }
-    }
+    };
+
+    restaurarSesion();
   }, []);
 
   const handleLogin = (userData, token) => {

@@ -5,6 +5,22 @@ const jwt = require('jsonwebtoken');
 const Admin = require('../models/Admin');
 const Cobrador = require('../models/Cobrador');
 
+const authRequired = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ error: 'Token requerido' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'tu_secreto_temporal');
+    req.authUser = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Token inválido' });
+  }
+};
+
 // Ruta de login para admin de oficina
 router.post('/admin/login', async (req, res) => {
   try {
@@ -182,6 +198,50 @@ router.post('/cobrador/login', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error en login cobrador:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/me', authRequired, async (req, res) => {
+  try {
+    if (req.authUser.rol === 'cobrador') {
+      const user = await Cobrador.findById(req.authUser.id).select('-password');
+
+      if (!user) {
+        return res.status(404).json({ error: 'Cobrador no encontrado' });
+      }
+
+      return res.json({
+        user: {
+          id: user._id,
+          nombre: user.nombre,
+          email: user.email,
+          rol: 'cobrador',
+          tenantId: user.tenantId,
+          cedula: user.cedula,
+          telefono: user.telefono,
+          zona: user.zona
+        }
+      });
+    }
+
+    const user = await Admin.findById(req.authUser.id).select('-password');
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    return res.json({
+      user: {
+        id: user._id,
+        nombre: user.nombre,
+        email: user.email,
+        rol: user.rol,
+        tenantId: user.tenantId
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error en GET /auth/me:', error);
     res.status(500).json({ error: error.message });
   }
 });
