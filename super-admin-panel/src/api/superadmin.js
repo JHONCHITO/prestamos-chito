@@ -91,4 +91,10 @@ export const getEmpresasMorosas = async () => {
   return response.data;
 };
 
+export const enviarRecordatorioPago = async (data) => {
+  console.log('🔔 Enviando recordatorio:', data);
+  const response = await api.post('/pagos/recordatorio', data);
+  return response.data;
+};
+
 export default api;

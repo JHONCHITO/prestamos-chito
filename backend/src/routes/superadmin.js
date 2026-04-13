@@ -325,8 +325,46 @@ router.get("/oficinas/:id/detalle", isSuperAdmin, async (req, res) => {
     // Calcular estadísticas de la oficina
     const totalPrestamos = prestamos.length;
     const prestamosActivos = prestamos.filter(p => p.estado === "activo").length;
+    const prestamosPagados = prestamos.filter(p => p.estado === "pagado").length;
+    const prestamosVencidos = prestamos.filter(p => p.estado === "vencido").length;
+    const capitalColocado = prestamos.reduce((sum, p) => sum + (p.capital || 0), 0);
+    const totalProgramado = prestamos.reduce((sum, p) => sum + (p.totalAPagar || 0), 0);
     const totalRecaudado = prestamos.reduce((sum, p) => sum + (p.totalPagado || 0), 0);
     const carteraActual = prestamos.reduce((sum, p) => sum + (p.totalAPagar - (p.totalPagado || 0)), 0);
+    const promedioPrestamo = totalPrestamos > 0 ? capitalColocado / totalPrestamos : 0;
+    const efectividadCobro = totalProgramado > 0 ? (totalRecaudado / totalProgramado) * 100 : 0;
+
+    const cobradoresConStats = cobradores.map((cobrador) => {
+      const clientesAsignados = clientes.filter(
+        (cliente) => String(cliente.cobrador) === String(cobrador._id)
+      ).length;
+
+      const prestamosDelCobrador = prestamos.filter(
+        (prestamo) => String(prestamo.cobrador) === String(cobrador._id)
+      );
+
+      const prestamosActivosCobrador = prestamosDelCobrador.filter(
+        (prestamo) => prestamo.estado === "activo"
+      ).length;
+
+      const carteraActiva = prestamosDelCobrador.reduce(
+        (sum, prestamo) => sum + ((prestamo.totalAPagar || 0) - (prestamo.totalPagado || 0)),
+        0
+      );
+
+      const totalRecaudadoCobrador = prestamosDelCobrador.reduce(
+        (sum, prestamo) => sum + (prestamo.totalPagado || 0),
+        0
+      );
+
+      return {
+        ...cobrador.toObject(),
+        clientesAsignados,
+        prestamosActivos: prestamosActivosCobrador,
+        carteraActiva,
+        totalRecaudado: totalRecaudadoCobrador,
+      };
+    });
 
     res.json({
       tenant,
@@ -336,11 +374,17 @@ router.get("/oficinas/:id/detalle", isSuperAdmin, async (req, res) => {
         clientes: clientes.length,
         totalPrestamos,
         prestamosActivos,
+        prestamosPagados,
+        prestamosVencidos,
+        capitalColocado,
+        totalProgramado,
         totalRecaudado,
-        carteraActual
+        carteraActual,
+        promedioPrestamo,
+        efectividadCobro,
       },
       admins,
-      cobradores
+      cobradores: cobradoresConStats
     });
   } catch (err) {
     console.error("Error obteniendo detalle:", err);
