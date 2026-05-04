@@ -805,12 +805,19 @@ const prioridad = creditos
   .map(p => {
     const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
 
-    let dias = null;
-    if (p.fechaUltimoPago) {
-      dias = Math.floor(
-        (hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24)
-      );
-    }
+   let fechaBase = null;
+
+if (p.fechaUltimoPago) {
+  fechaBase = new Date(p.fechaUltimoPago);
+} else if (p.createdAt) {
+  fechaBase = new Date(p.createdAt);
+}
+
+let dias = null;
+
+if (fechaBase) {
+  dias = Math.floor((hoy - fechaBase) / (1000 * 60 * 60 * 24));
+}
 
     return {
       nombre: p.cliente?.nombre,
@@ -829,11 +836,12 @@ const prioridad = creditos
 
 prioridad.forEach((p, i) => {
   if (p.dias !== null) {
-    datos += `${i + 1}. ${p.nombre} - ${p.dias} días sin pagar\n`;
-  } else {
-    datos += `${i + 1}. ${p.nombre} - sin registro de último pago\n`;
-  }
+  datos += `${i + 1}. ${p.nombre} - ${p.dias} días desde último movimiento\n`;
+} else {
+  datos += `${i + 1}. ${p.nombre} - cliente sin historial de pagos\n`;
+}
 });
+datos += "\nIMPORTANTE: Nunca inventes días. Usa solo los valores dados. Si no hay días, indica claramente que no hay registro.\n";
   const respuesta = await responderIA(text, datos);
 
   await sendMessage(chatId, respuesta);
