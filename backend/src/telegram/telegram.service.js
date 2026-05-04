@@ -3,7 +3,11 @@ const Cliente = require('../models/Cliente');
 const Cobrador = require('../models/Cobrador');
 const Prestamo = require('../models/Prestamo');
 const Pago = require('../models/Pago');
+const OpenAI = require("openai");
 
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 // ─── SESIONES EN MEMORIA ──────────────────────────────────────────
@@ -736,10 +740,43 @@ const handleMessage = async (message) => {
       return;
     }
 
-    await sendMessage(
-      chatId,
-      'No entendí ese mensaje.\n\nUsa /menu para abrir el menú principal.'
-    );
+    // 🔥 IA RESPONDE MENSAJES
+try {
+  console.log("🔥 IA ACTIVADA");
+
+  const clientes = await Cliente.find({
+    tenantId: cobrador.tenantId,
+  }).limit(5);
+
+  const creditos = await Prestamo.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  })
+  .populate("cliente")
+  .limit(5);
+
+  let datos = "CLIENTES:\n";
+
+  clientes.forEach(c => {
+    datos += `- ${c.nombre}, Tel: ${c.celular}\n`;
+  });
+
+  datos += "\nCRÉDITOS:\n";
+
+  creditos.forEach(p => {
+    const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
+    datos += `- ${p.cliente?.nombre}: deuda $${saldo}\n`;
+  });
+
+  const respuesta = await responderIA(text, datos);
+
+  await sendMessage(chatId, respuesta);
+  return;
+
+} catch (error) {
+  console.error("❌ ERROR IA:", error.message);
+  await sendMessage(chatId, "❌ Error con la IA");
+}
   } catch (error) {
     console.error('❌ Error handleMessage:', error.response?.data || error.message);
     throw error;
@@ -811,59 +848,22 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
     if (data === 'menu_clientes') {
-  const clientes = await Cliente.find({
-    tenantId: cobrador.tenantId,
-    cobrador: cobrador._id,
-  }).limit(50);
-
-  if (!clientes.length) {
-    await sendMessage(chatId, "❌ No tienes clientes registrados.");
-    return;
-  }
-
-  let mensaje = "👥 <b>Lista de Clientes:</b>\n\n";
-
-  clientes.forEach((c, i) => {
-    mensaje += `${i + 1}. <b>${c.nombre}</b>\n`;
-    mensaje += `📞 ${c.celular || "Sin celular"}\n`;
-    mensaje += `🏠 ${c.direccion || "Sin dirección"}\n\n`;
-  });
-
-  mensaje += `📊 Total: ${clientes.length} clientes`;
-
-  await sendMessage(chatId, mensaje);
-  return;
-}
+      const total = await Cliente.countDocuments({
+        tenantId: cobrador.tenantId,
+        cobrador: cobrador._id,
+      });
+      await sendMessage(chatId, `👥 Tienes <b>${total}</b> clientes registrados.`);
+      return;
+    }
 
     if (data === 'menu_creditos') {
-  const creditos = await Prestamo.find({
-    tenantId: cobrador.tenantId,
-    cobrador: cobrador._id,
-  })
-  .populate("cliente")
-  .limit(10);
-
-  if (!creditos.length) {
-    await sendMessage(chatId, "❌ No tienes créditos registrados.");
-    return;
-  }
-
-  let mensaje = "💳 <b>Lista de Créditos:</b>\n\n";
-
-  creditos.forEach((c, i) => {
-    const saldo = Math.max(0, (c.totalAPagar || 0) - (c.totalPagado || 0));
-
-    mensaje += `${i + 1}. 👤 ${c.cliente?.nombre || "Sin nombre"}\n`;
-    mensaje += `💰 $${(c.capital || 0).toLocaleString("es-CO")}\n`;
-    mensaje += `📌 Estado: ${c.estado}\n`;
-    mensaje += `💳 Saldo: $${saldo.toLocaleString("es-CO")}\n\n`;
-  });
-
-  mensaje += `📊 Total: ${creditos.length} créditos`;
-
-  await sendMessage(chatId, mensaje);
-  return;
-}
+      const total = await Prestamo.countDocuments({
+        tenantId: cobrador.tenantId,
+        cobrador: cobrador._id,
+      });
+      await sendMessage(chatId, `💳 Tienes <b>${total}</b> créditos registrados.`);
+      return;
+    }
 
     await sendMessage(chatId, '❓ Opción no reconocida. Usa /menu');
   } catch (error) {
@@ -878,3 +878,26 @@ module.exports = {
   handleMessage,
   handleCallbackQuery,
 };
+async function responderIA(pregunta, datos = "") {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      messages: [
+        {
+          role: "system",
+          content: "Eres un asistente de préstamos llamado Chito. Responde como un asesor humano, claro y profesional.",
+        },
+        {
+          role: "user",
+          content: `Pregunta: ${pregunta}\n\nDatos:\n${datos}`,
+        },
+      ],
+    });
+
+    return completion.choices[0].message.content;
+
+  } catch (error) {
+    console.error("Error IA:", error.message);
+    return "❌ Error con la IA";
+  }
+}
