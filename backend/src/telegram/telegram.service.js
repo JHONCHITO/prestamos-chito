@@ -739,6 +739,13 @@ const handleMessage = async (message) => {
       await enviarMenuPrincipal(chatId, cobrador.nombre || 'Cobrador');
       return;
     }
+    if (text.toLowerCase() === "si" || text.toLowerCase().includes("si por favor")) {
+  await sendMessage(
+    chatId,
+    "¿Qué necesitas exactamente?\n\n1. Mensajes para cobrar\n2. Estrategia\n3. Lista de clientes"
+  );
+  return;
+}
 
     // 🔥 IA RESPONDE MENSAJES
 try {
@@ -842,7 +849,14 @@ prioridad.forEach((p, i) => {
 }
 });
 datos += "\nIMPORTANTE: Nunca inventes días. Usa solo los valores dados. Si no hay días, indica claramente que no hay registro.\n";
-  const respuesta = await responderIA(text, datos);
+ let tipoPregunta = "general";
+
+if (text.includes("cobrar")) tipoPregunta = "cobro";
+if (text.includes("mensaje")) tipoPregunta = "mensaje";
+if (text.includes("resumen")) tipoPregunta = "resumen";
+
+datos += `\nTipo de solicitud: ${tipoPregunta}\n`;
+const respuesta = await responderIA(text, datos);
 
   await sendMessage(chatId, respuesta);
   return;
@@ -960,8 +974,12 @@ async function responderIA(pregunta, datos = "") {
       messages: [
         {
           role: "system",
-          content: "Eres un asesor financiero experto en préstamos. Analiza los datos cuidadosamente, identifica los clientes con mayor deuda, detecta clientes en riesgo, recomienda a quién cobrar primero y responde de forma clara, profesional y útil como un cobrador experto."
+          content: "Eres un asesor financiero experto en préstamos. Responde de forma natural y variada, como una persona real. No repitas siempre la misma estructura. Sé directo si la pregunta es simple. Si el usuario pide algo específico (como mensajes o ayuda), responde solo a eso y no repitas todo el análisis. Da respuestas útiles, claras y diferentes cada vez."
         },
+        {
+  role: "system",
+  content: "Si la pregunta es corta, responde corto. No repitas información innecesaria."
+},
           {
     role: "system",
     content: "Responde en español, usa listas cuando sea necesario y da recomendaciones prácticas."
