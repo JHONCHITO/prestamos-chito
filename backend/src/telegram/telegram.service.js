@@ -482,7 +482,7 @@ const consultarCliente = async (chatId, cedula, cobrador) => {
     cliente: cliente._id,
     tenantId: cobrador.tenantId,
     cobrador: cobrador._id,
-  }).sort({ createdAt: -1 }).limit(5);
+  }).sort({ createdAt: -1 }).limit(50);
 
   let texto = `👤 <b>${cliente.nombre}</b>\n🪪 ${cliente.cedula}\n📱 ${cliente.celular || 'Sin celular'}\n🏠 ${cliente.direccion || 'Sin dirección'}\n\n`;
 
@@ -746,27 +746,31 @@ try {
 
   const clientes = await Cliente.find({
     tenantId: cobrador.tenantId,
-  }).limit(5);
+  }).limit(50);
 
   const creditos = await Prestamo.find({
-    tenantId: cobrador.tenantId,
-    cobrador: cobrador._id,
-  })
-  .populate("cliente")
-  .limit(5);
+  tenantId: cobrador.tenantId,
+  cobrador: cobrador._id,
+  estado: "activo" // 🔥 SOLO LOS QUE DEBEN
+})
+.populate("cliente")
+.limit(50);
 
-  let datos = "CLIENTES:\n";
+ let datos = "CLIENTES:\n";
 
-  clientes.forEach(c => {
-    datos += `- ${c.nombre}, Tel: ${c.celular}\n`;
-  });
+clientes.forEach(c => {
+  datos += `- ${c.nombre}, Tel: ${c.celular}\n`;
+});
 
-  datos += "\nCRÉDITOS:\n";
+datos += "\nCRÉDITOS:\n";
 
-  creditos.forEach(p => {
-    const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
+creditos.forEach(p => {
+  const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
+
+  if (saldo > 0) {
     datos += `- ${p.cliente?.nombre}: deuda $${saldo}\n`;
-  });
+  }
+});
 
   const respuesta = await responderIA(text, datos);
 
@@ -776,6 +780,7 @@ try {
 } catch (error) {
   console.error("❌ ERROR IA:", error.message);
   await sendMessage(chatId, "❌ Error con la IA");
+  return; // 🔥 ESTE ES EL ARREGLO
 }
   } catch (error) {
     console.error('❌ Error handleMessage:', error.response?.data || error.message);
