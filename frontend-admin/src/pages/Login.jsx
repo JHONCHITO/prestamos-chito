@@ -23,22 +23,24 @@ const Login = ({ onLogin }) => {
       console.log('🔐 1. Intentando login con:', email);
       
       const response = await login(email, password);
-      
+      const payload = response?.data ?? response;
+
       // OBTENER DATOS DEL USUARIO (puede venir como 'admin' o 'user')
-      const userData = response.admin || response.user;
+      const userData = payload?.admin || payload?.user;
+      const token = payload?.token;
       
       console.log('🔐 2. Respuesta recibida:', response);
       console.log('🔐 3. user object:', userData);
       console.log('🔐 4. tenantId en userData:', userData?.tenantId);
       
-      if (!response.token) {
+      if (!token) {
         throw new Error('No se recibió token');
       }
       
       if (!userData) {
         throw new Error('No se recibieron datos de usuario');
       }
-      
+
       if (!userData.tenantId) {
         console.error('❌ ERROR CRÍTICO: No hay tenantId en la respuesta');
         setError('Error: Usuario sin ID de empresa. Contacte al administrador.');
@@ -50,13 +52,13 @@ const Login = ({ onLogin }) => {
       localStorage.clear();
       
       // GUARDAR DATOS
-      localStorage.setItem('admin_token', response.token);
+      localStorage.setItem('admin_token', token);
       localStorage.setItem('admin_user', JSON.stringify(userData));
       localStorage.setItem('tenantId', userData.tenantId);
       
       console.log('✅ 5. Datos guardados:');
       console.log('   - tenantId:', localStorage.getItem('tenantId'));
-      console.log('   - admin_token:', response.token.substring(0, 50) + '...');
+      console.log('   - admin_token:', token.substring(0, 50) + '...');
       console.log('   - admin_user:', localStorage.getItem('admin_user'));
       
       // VERIFICAR QUE SE GUARDARON
@@ -80,7 +82,7 @@ const Login = ({ onLogin }) => {
       console.log('✅ Login exitoso! Redirigiendo...');
       
       // Llamar al callback del padre
-      onLogin(userData, response.token);
+      onLogin(userData, token);
       
     } catch (err) {
       console.error('❌ Error en login:', err);

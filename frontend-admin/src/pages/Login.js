@@ -139,7 +139,19 @@ export default function Login({ onLogin }) {
     setLoading(true); setError('');
     try {
       const res = await authAPI.login(email, password);
-      onLogin(res.data.admin || res.data.user, res.data.token);
+      const payload = res?.data ?? res;
+      const userData = payload?.admin || payload?.user;
+      const token = payload?.token;
+
+      if (!token) {
+        throw new Error('No se recibio token');
+      }
+
+      if (!userData) {
+        throw new Error('No se recibieron datos de usuario');
+      }
+
+      onLogin(userData, token);
     } catch (err) {
       setError(err.response?.data?.error || 'Error al iniciar sesión');
     } finally { setLoading(false); }

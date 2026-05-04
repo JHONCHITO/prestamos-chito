@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { Modal, List, Badge, Button, message, Typography, Space, Tag, Avatar, Tooltip } from 'antd';
 import { BellOutlined, WarningOutlined, CheckCircleOutlined, CloseCircleOutlined, DeleteOutlined, MailOutlined } from '@ant-design/icons';
+import { SOCKET_URL } from '../services/api';
 
 const { Text } = Typography;
 
@@ -22,12 +23,7 @@ const Notificaciones = () => {
     console.log('🏢 Conectando con tenantId:', tenantId);
 
     // Conectar al servidor WebSocket
-    const SOCKET_URL =
-  import.meta.env.VITE_SOCKET_URL ||
-  import.meta.env.VITE_API_URL?.replace('/api', '') ||
-  'https://prestamos-chito-backend.onrender.com';
-
-const newSocket = io(SOCKET_URL, {
+    const newSocket = io(SOCKET_URL, {
   transports: ['polling', 'websocket'],
   reconnection: true,
   reconnectionAttempts: 5,

@@ -1,62 +1,139 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://prestamos-chito.vercel.app/api';
+const LOCAL_API_URL = 'http://localhost:5000/api';
+const DEFAULT_API_URL = 'https://prestamos-chito-backend.onrender.com/api';
 
-console.log('📡 API URL Configurada:', API_URL);
-console.log('🌐 Conectando a:', process.env.REACT_APP_API_URL);
+function readEnv(name) {
+  if (typeof process !== 'undefined' && process.env && typeof process.env[name] === 'string') {
+    return process.env[name].trim();
+  }
 
-const api = axios.create({ 
+  return '';
+}
+
+function readWindow(name) {
+  if (typeof window !== 'undefined' && typeof window[name] === 'string') {
+    return window[name].trim();
+  }
+
+  return '';
+}
+
+function isLocalHost(hostname) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+}
+
+function normalizeUrl(rawUrl) {
+  const value = String(rawUrl || '').trim();
+
+  if (!value || value === '/api' || value === 'api') {
+    return '';
+  }
+
+  if (!/^https?:\/\//i.test(value)) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(value);
+
+    if (typeof window !== 'undefined' && parsed.hostname === window.location.hostname && !isLocalHost(parsed.hostname)) {
+      return '';
+    }
+  } catch (error) {
+    return '';
+  }
+
+  return value.replace(/\/+$/, '');
+}
+
+function resolveApiUrl() {
+  const candidates = [
+    readEnv('REACT_APP_API_URL'),
+    readWindow('__API_URL__'),
+    readWindow('__REACT_APP_API_URL__')
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeUrl(candidate);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  if (typeof window !== 'undefined' && isLocalHost(window.location.hostname)) {
+    return LOCAL_API_URL;
+  }
+
+  return DEFAULT_API_URL;
+}
+
+export const API_URL = resolveApiUrl();
+export const SOCKET_URL = API_URL.replace(/\/api\/?$/, '');
+
+console.log('[api] API URL:', API_URL);
+console.log('[api] Socket URL:', SOCKET_URL);
+
+const api = axios.create({
   baseURL: API_URL,
-  timeout: 15000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json'
   }
 });
 
-// Interceptor para token (MEJORADO con logs)
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('admin_token');
+    const tenantId = localStorage.getItem('tenantId');
+    const requestUrl = config.url || '';
+    const isAuthRoute = requestUrl.includes('/auth/');
+
+    console.log(`[api] ${config.method?.toUpperCase()} ${requestUrl}`);
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    console.log('🚀 Petición:', config.method?.toUpperCase(), config.url);
+
+    if (tenantId && !isAuthRoute) {
+      config.headers['x-tenant-id'] = tenantId;
+    }
+
     return config;
   },
-  (error) => Promise.reject(error)
+  (error) => {
+    console.error('[api] Request interceptor error:', error);
+    return Promise.reject(error);
+  }
 );
 
-// Interceptor para respuestas (MEJORADO con logs)
 api.interceptors.response.use(
-  (response) => {
-    console.log('✅ Respuesta:', response.status, response.config.url);
-    return response;
-  },
+  (response) => response,
   (err) => {
-    if (err.response?.status === 401) {
+    console.error(`[api] Error ${err.response?.status || 'no-status'}`, err.response?.config?.url);
+
+    if (err.response?.status === 401 && typeof window !== 'undefined') {
       localStorage.removeItem('admin_token');
       localStorage.removeItem('admin_user');
+      localStorage.removeItem('tenantId');
       window.location.href = '/';
     }
-    console.error('❌ Error:', err.response?.status, err.config?.url);
+
     return Promise.reject(err);
   }
 );
 
-// ===== SERVICIOS DE AUTENTICACIÓN =====
 export const authAPI = {
   login: (email, password) => api.post('/auth/admin/login', { email, password }),
   logout: () => api.post('/auth/logout')
 };
 
-// ===== SERVICIOS DE DASHBOARD =====
 export const dashboardAPI = {
   get: () => api.get('/dashboard'),
   getStats: () => api.get('/dashboard/stats'),
   getCharts: () => api.get('/dashboard/charts')
 };
 
-// ===== SERVICIOS DE COBRADORES =====
 export const cobradoresAPI = {
   getAll: (search) => api.get('/cobradores', { params: { search } }),
   getById: (id) => api.get(`/cobradores/${id}`),
@@ -65,7 +142,6 @@ export const cobradoresAPI = {
   delete: (id) => api.delete(`/cobradores/${id}`)
 };
 
-// ===== SERVICIOS DE CLIENTES =====
 export const clientesAPI = {
   getAll: (search) => api.get('/clientes', { params: { search } }),
   getById: (id) => api.get(`/clientes/${id}`),
@@ -74,7 +150,6 @@ export const clientesAPI = {
   delete: (id) => api.delete(`/clientes/${id}`)
 };
 
-// ===== SERVICIOS DE PRÉSTAMOS =====
 export const prestamosAPI = {
   getAll: (params) => api.get('/prestamos', { params }),
   getById: (id) => api.get(`/prestamos/${id}`),
@@ -85,44 +160,31 @@ export const prestamosAPI = {
   registrarPago: (data) => api.post('/pagos', data)
 };
 
-// ===== SERVICIOS DE INVENTARIO (COMPLETO) =====
 export const inventarioAPI = {
   getAll: (params) => api.get('/inventario', { params }),
   getById: (id) => api.get(`/inventario/${id}`),
   create: (data) => api.post('/inventario', data),
   update: (id, data) => api.put(`/inventario/${id}`, data),
   delete: (id) => api.delete(`/inventario/${id}`),
-  getStats: () => api.get('/inventario/stats/resumen')  // <--- NUEVO: Método para estadísticas
+  getStats: () => api.get('/inventario/stats/resumen')
 };
 
-// ===== SERVICIOS DE PAGOS =====
 export const pagosAPI = {
   create: (prestamoId, data) => api.post(`/pagos/${prestamoId}`, data),
   getByPrestamo: (prestamoId) => api.get(`/pagos/prestamo/${prestamoId}`)
 };
 
-// ===== 🚀 NUEVO: SERVICIOS DE CARTERA =====
 export const carteraAPI = {
-  // Resumen para tarjetas (cartera total, recaudado, etc.)
   getResumen: () => api.get('/cartera'),
-  
-  // Lista detallada para la tabla de préstamos
   getPrestamos: () => api.get('/cartera/prestamos'),
-  
-  // Cartera agrupada por cobrador
   getPorCobrador: () => api.get('/cartera/cobradores'),
-  
-  // Estadísticas para gráficos
   getEstadisticas: () => api.get('/cartera/estadisticas'),
-  
-  // Pagos del día/mes
   getPagosResumen: () => api.get('/cartera/pagos/resumen')
 };
 
-// ===== SERVICIOS DE REPORTES (opcional) =====
 export const reportesAPI = {
   getDiario: (fecha) => api.get(`/reportes/diario?fecha=${fecha}`),
-  getMensual: (mes, año) => api.get(`/reportes/mensual?mes=${mes}&año=${año}`)
+  getMensual: (mes, ano) => api.get(`/reportes/mensual?mes=${mes}&año=${ano}`)
 };
 
 export default api;
