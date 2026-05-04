@@ -67,7 +67,7 @@ router.post('/', verificarToken, async (req, res) => {
     await Prestamo.findByIdAndUpdate(prestamoId, {
       totalPagado: nuevoTotalPagado,
       estado: nuevoEstado,
-      ultimoPago: new Date()
+      ultimoPago: fecha ? new Date(fecha) : new Date()
     });
     
     // Registrar pago

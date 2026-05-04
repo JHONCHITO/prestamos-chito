@@ -53,6 +53,9 @@ const prestamoSchema = new mongoose.Schema({
   fechaVencimiento: { 
     type: Date 
   },
+  ultimoPago: {
+    type: Date
+  },
   estado: { 
     type: String, 
     enum: ['activo', 'pagado', 'vencido', 'cancelado'], 

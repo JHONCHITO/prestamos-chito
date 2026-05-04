@@ -33,6 +33,354 @@ const clearAutenticacion = (chatId) => {
 
 const getAutenticacion = (chatId) => autenticaciones[chatId] || null;
 
+const ZONA_HORARIA = 'America/Bogota';
+const DIA_MS = 24 * 60 * 60 * 1000;
+
+const normalizarTexto = (texto = '') =>
+  String(texto)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const extraerFechaZonaHoraria = (fecha) => {
+  if (!fecha) return null;
+
+  const date = new Date(fecha);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const partes = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ZONA_HORARIA,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+
+  const mapa = Object.fromEntries(
+    partes
+      .filter((parte) => parte.type !== 'literal')
+      .map((parte) => [parte.type, parte.value])
+  );
+
+  return new Date(`${mapa.year}-${mapa.month}-${mapa.day}T00:00:00-05:00`);
+};
+
+const calcularDiasEntreFechas = (fechaInicio, fechaFin = new Date()) => {
+  const inicio = extraerFechaZonaHoraria(fechaInicio);
+  const fin = extraerFechaZonaHoraria(fechaFin);
+
+  if (!inicio || !fin) return null;
+
+  return Math.max(0, Math.floor((fin.getTime() - inicio.getTime()) / DIA_MS));
+};
+
+const formatearFechaBogota = (fecha) => {
+  if (!fecha) return 'sin fecha';
+
+  return new Intl.DateTimeFormat('es-CO', {
+    timeZone: ZONA_HORARIA,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(fecha));
+};
+
+const formatearMonto = (valor) => `$${Number(valor || 0).toLocaleString('es-CO')}`;
+
+const escapeHtml = (value = '') =>
+  String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const construirMapaUltimosPagos = async (prestamos = []) => {
+  const ids = prestamos
+    .map((prestamo) => prestamo?._id)
+    .filter(Boolean)
+    .map((id) => String(id));
+
+  if (!ids.length) return new Map();
+
+  const pagos = await Pago.find({ prestamoId: { $in: ids } })
+    .sort({ fecha: -1 })
+    .select('prestamoId fecha')
+    .lean();
+
+  const mapa = new Map();
+
+  pagos.forEach((pago) => {
+    const clave = String(pago.prestamoId);
+    if (!mapa.has(clave) && pago.fecha) {
+      mapa.set(clave, new Date(pago.fecha));
+    }
+  });
+
+  return mapa;
+};
+
+const obtenerFechaMovimientoPrestamo = async (prestamo, mapaUltimosPagos = null) => {
+  if (!prestamo?._id) return null;
+
+  const clave = String(prestamo._id);
+  const fechaUltimoPago = mapaUltimosPagos?.get(clave);
+
+  if (fechaUltimoPago) {
+    return { fecha: fechaUltimoPago, origen: 'último pago registrado' };
+  }
+
+  if (prestamo.ultimoPago) {
+    return { fecha: new Date(prestamo.ultimoPago), origen: 'último pago registrado' };
+  }
+
+  if (prestamo.fechaInicio) {
+    return { fecha: new Date(prestamo.fechaInicio), origen: 'fecha del préstamo' };
+  }
+
+  if (prestamo.createdAt) {
+    return { fecha: new Date(prestamo.createdAt), origen: 'creación del préstamo' };
+  }
+
+  return null;
+};
+
+const resumirPrestamo = async (prestamo, mapaUltimosPagos = null) => {
+  const saldoPendiente = Math.max(
+    0,
+    Number(prestamo.totalAPagar || 0) - Number(prestamo.totalPagado || 0)
+  );
+  const movimiento = await obtenerFechaMovimientoPrestamo(prestamo, mapaUltimosPagos);
+  const fechaPrestamo = prestamo.fechaInicio || prestamo.createdAt || null;
+  const fechaReferencia = movimiento?.fecha || fechaPrestamo;
+  const diasDesdePrestamo = calcularDiasEntreFechas(fechaPrestamo);
+  const diasDesdeMovimiento = calcularDiasEntreFechas(fechaReferencia);
+
+  return {
+    saldoPendiente,
+    fechaPrestamo,
+    fechaReferencia,
+    diasDesdePrestamo,
+    diasDesdeMovimiento,
+    origenMovimiento: movimiento?.origen || 'fecha del préstamo',
+  };
+};
+
+const resumirPrestamos = async (prestamos = []) => {
+  const mapaUltimosPagos = await construirMapaUltimosPagos(prestamos);
+
+  return Promise.all(
+    prestamos.map(async (prestamo) => {
+      const resumen = await resumirPrestamo(prestamo, mapaUltimosPagos);
+      return {
+        prestamo,
+        ...resumen,
+      };
+    })
+  );
+};
+
+const buscarClienteMencionado = (texto, clientes = []) => {
+  const consulta = normalizarTexto(texto);
+  if (!consulta) return null;
+
+  const candidatos = [];
+
+  clientes.forEach((cliente) => {
+    const nombre = normalizarTexto(cliente.nombre);
+    const cedula = normalizarTexto(cliente.cedula);
+    let puntaje = 0;
+
+    if (nombre && consulta.includes(nombre)) puntaje += 100;
+    if (cedula && consulta.includes(cedula)) puntaje += 80;
+
+    nombre
+      .split(' ')
+      .filter((parte) => parte.length >= 3)
+      .forEach((parte) => {
+        if (consulta.includes(parte)) puntaje += 10;
+      });
+
+    if (puntaje > 0) {
+      candidatos.push({ cliente, puntaje });
+    }
+  });
+
+  candidatos.sort((a, b) => b.puntaje - a.puntaje);
+  return candidatos[0]?.cliente || null;
+};
+
+const construirMensajeClientes = async (cobrador) => {
+  const clientes = await Cliente.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  })
+    .sort({ createdAt: -1 })
+    .limit(50);
+
+  const prestamos = await Prestamo.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+    estado: { $ne: 'pagado' },
+  })
+    .populate('cliente')
+    .sort({ createdAt: -1 })
+    .limit(100);
+
+  const resumenPrestamos = await resumirPrestamos(prestamos);
+  const activosPorCliente = new Map();
+
+  resumenPrestamos.forEach((item) => {
+    const clienteId = String(item.prestamo.cliente?._id || '');
+    const nombre = item.prestamo.cliente?.nombre;
+    if (!clienteId || !nombre || item.saldoPendiente <= 0) return;
+
+    const actual = activosPorCliente.get(clienteId) || {
+      nombre,
+      saldoPendiente: 0,
+      diasDesdeMovimiento: null,
+      origenMovimiento: item.origenMovimiento,
+      fechaReferencia: item.fechaReferencia,
+      fechaPrestamo: item.fechaPrestamo,
+    };
+
+    actual.saldoPendiente += item.saldoPendiente;
+
+    if (
+      actual.diasDesdeMovimiento === null ||
+      (item.diasDesdeMovimiento ?? -1) > actual.diasDesdeMovimiento
+    ) {
+      actual.diasDesdeMovimiento = item.diasDesdeMovimiento;
+      actual.origenMovimiento = item.origenMovimiento;
+      actual.fechaReferencia = item.fechaReferencia;
+      actual.fechaPrestamo = item.fechaPrestamo;
+    }
+
+    activosPorCliente.set(clienteId, actual);
+  });
+
+  let msg = `👥 Tienes <b>${clientes.length}</b> clientes registrados.\n`;
+
+  if (activosPorCliente.size) {
+    msg += `💳 <b>Clientes con deuda activa:</b>\n`;
+    [...activosPorCliente.values()]
+      .sort((a, b) => {
+        if (b.saldoPendiente !== a.saldoPendiente) {
+          return b.saldoPendiente - a.saldoPendiente;
+        }
+        return (b.diasDesdeMovimiento ?? -1) - (a.diasDesdeMovimiento ?? -1);
+      })
+      .slice(0, 5)
+      .forEach((item, i) => {
+        msg += `\n${i + 1}. ${escapeHtml(item.nombre)} - ${formatearMonto(item.saldoPendiente)} - ${item.diasDesdeMovimiento ?? 'sin dato'} días desde ${item.origenMovimiento}`;
+      });
+  }
+
+  if (clientes.length) {
+    msg += `\n\n📋 <b>Algunos clientes recientes:</b>\n`;
+    clientes.slice(0, 10).forEach((cliente, i) => {
+      msg += `\n${i + 1}. ${escapeHtml(cliente.nombre)}`;
+    });
+  }
+
+  return msg;
+};
+
+const construirMensajeCreditos = async (cobrador, texto = '') => {
+  const prestamos = await Prestamo.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+    estado: { $ne: 'pagado' },
+  })
+    .populate('cliente')
+    .sort({ createdAt: -1 })
+    .limit(100);
+
+  const resumenPrestamos = await resumirPrestamos(prestamos);
+  const activos = resumenPrestamos
+    .filter((item) => item.saldoPendiente > 0)
+    .sort((a, b) => {
+      const da = a.diasDesdeMovimiento ?? -1;
+      const db = b.diasDesdeMovimiento ?? -1;
+      if (db !== da) return db - da;
+      return b.saldoPendiente - a.saldoPendiente;
+    });
+
+  if (!activos.length) {
+    return '💳 No tienes créditos activos por el momento.';
+  }
+
+  const totalSaldo = activos.reduce((acc, item) => acc + item.saldoPendiente, 0);
+  const quierePrioridad = normalizarTexto(texto).includes('prioridad') || normalizarTexto(texto).includes('quien debe') || normalizarTexto(texto).includes('quien me debe');
+  const limite = quierePrioridad ? 5 : 8;
+
+  let msg = `💳 <b>Tienes ${activos.length} créditos activos</b> y un saldo por cobrar de <b>${formatearMonto(totalSaldo)}</b>.\n`;
+
+  if (quierePrioridad) {
+    msg += `\n🏁 <b>Prioridad de cobro</b>:\n`;
+  } else {
+    msg += `\n📌 <b>Detalle de créditos</b>:\n`;
+  }
+
+  activos.slice(0, limite).forEach((item, i) => {
+    const nombre = escapeHtml(item.prestamo.cliente?.nombre || 'Sin cliente');
+    const fechaPrestamo = formatearFechaBogota(item.fechaPrestamo);
+    const fechaMovimiento = formatearFechaBogota(item.fechaReferencia);
+    const diasPrestamo = item.diasDesdePrestamo ?? 'sin dato';
+    const diasMovimiento = item.diasDesdeMovimiento ?? 'sin dato';
+
+    msg += `\n${i + 1}. ${nombre} - ${formatearMonto(item.saldoPendiente)} - ${diasMovimiento} días desde ${item.origenMovimiento} (${fechaMovimiento})`;
+    msg += `\n   Inicio: ${fechaPrestamo} | Tiempo desde el préstamo: ${diasPrestamo} días`;
+  });
+
+  return msg;
+};
+
+const construirMensajeClienteEspecifico = async (cliente, cobrador) => {
+  const prestamos = await Prestamo.find({
+    cliente: cliente._id,
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  })
+    .sort({ createdAt: -1 })
+    .limit(50);
+
+  if (!prestamos.length) {
+    return `👤 <b>${escapeHtml(cliente.nombre)}</b>\n🪪 ${escapeHtml(cliente.cedula)}\n📱 ${escapeHtml(cliente.celular || 'Sin celular')}\n🏠 ${escapeHtml(cliente.direccion || 'Sin dirección')}\n\n💳 No tiene créditos registrados.`;
+  }
+
+  const resumenPrestamos = await resumirPrestamos(prestamos);
+  const totalSaldo = resumenPrestamos.reduce((acc, item) => acc + item.saldoPendiente, 0);
+  const masAntiguo = [...resumenPrestamos].sort((a, b) => (b.diasDesdeMovimiento ?? -1) - (a.diasDesdeMovimiento ?? -1))[0];
+
+  let texto = `👤 <b>${escapeHtml(cliente.nombre)}</b>\n`;
+  texto += `🪪 ${escapeHtml(cliente.cedula)}\n`;
+  texto += `📱 ${escapeHtml(cliente.celular || 'Sin celular')}\n`;
+  texto += `🏠 ${escapeHtml(cliente.direccion || 'Sin dirección')}\n`;
+  texto += `\n💳 <b>Saldo total pendiente:</b> ${formatearMonto(totalSaldo)}\n`;
+  texto += `📊 <b>Créditos registrados:</b> ${prestamos.length}\n`;
+
+  if (masAntiguo) {
+    texto += `\n🏁 <b>Dato clave:</b> ${escapeHtml(masAntiguo.prestamo.cliente?.nombre || cliente.nombre)} lleva ${masAntiguo.diasDesdeMovimiento ?? 'sin dato'} días desde ${masAntiguo.origenMovimiento}.`;
+    texto += `\n📅 Fecha de referencia: ${formatearFechaBogota(masAntiguo.fechaReferencia)}`;
+    texto += `\n📅 Inicio del préstamo: ${formatearFechaBogota(masAntiguo.fechaPrestamo)}`;
+  }
+
+  texto += `\n\n<b>Créditos:</b>`;
+  const visibles = resumenPrestamos.slice(0, 8);
+  visibles.forEach((item, i) => {
+    texto += `\n${i + 1}. ${formatearMonto(item.prestamo.capital)} | Saldo ${formatearMonto(item.saldoPendiente)} | Inicio ${formatearFechaBogota(item.fechaPrestamo)} | Último movimiento ${formatearFechaBogota(item.fechaReferencia)} (${item.diasDesdeMovimiento ?? 'sin dato'} días)`;
+  });
+
+  if (resumenPrestamos.length > visibles.length) {
+    texto += `\n... y ${resumenPrestamos.length - visibles.length} crédito(s) más.`;
+  }
+
+  return texto;
+};
+
 // ─── API TELEGRAM ─────────────────────────────────────────────────
 const getTelegramApiUrl = (method) => {
   if (!TELEGRAM_BOT_TOKEN) throw new Error('Falta TELEGRAM_BOT_TOKEN');
@@ -478,24 +826,7 @@ const consultarCliente = async (chatId, cedula, cobrador) => {
     return;
   }
 
-  const prestamos = await Prestamo.find({
-    cliente: cliente._id,
-    tenantId: cobrador.tenantId,
-    cobrador: cobrador._id,
-  }).sort({ createdAt: -1 }).limit(50);
-
-  let texto = `👤 <b>${cliente.nombre}</b>\n🪪 ${cliente.cedula}\n📱 ${cliente.celular || 'Sin celular'}\n🏠 ${cliente.direccion || 'Sin dirección'}\n\n`;
-
-  if (!prestamos.length) {
-    texto += '💳 No tiene créditos registrados.';
-  } else {
-    texto += '<b>Últimos créditos:</b>\n';
-    prestamos.forEach((p, i) => {
-      const saldoPendiente = Math.max(0, Number(p.totalAPagar || 0) - Number(p.totalPagado || 0));
-      texto += `\n${i + 1}. $${Number(p.capital || 0).toLocaleString('es-CO')} - Estado: ${p.estado || 'N/D'} - Saldo: $${saldoPendiente.toLocaleString('es-CO')}`;
-    });
-  }
-
+  const texto = await construirMensajeClienteEspecifico(cliente, cobrador);
   await sendMessage(chatId, texto);
   resetSesion(chatId);
   await enviarMenuPrincipal(chatId, cobrador.nombre);
@@ -623,6 +954,7 @@ const confirmarPago = async (chatId, cobrador) => {
     await pago.save();
 
     prestamo.totalPagado = Math.max(0, Number(prestamo.totalPagado || 0) + Number(d.monto));
+    prestamo.ultimoPago = new Date();
     if (prestamo.totalPagado >= Number(prestamo.totalAPagar || 0)) prestamo.estado = 'pagado';
     await prestamo.save();
 
@@ -735,206 +1067,83 @@ const handleMessage = async (message) => {
       if (handled) return;
     }
 
-    if (lowerText === 'hola') {
-      // 🔍 INTELIGENCIA: detectar intención del usuario
+    const respondidoNatural = await manejarConsultaNatural({
+      chatId,
+      text,
+      cobrador,
+    });
 
-// CONSULTAR CLIENTE
-if (
-  lowerText.includes("consultar cliente") ||
-  lowerText.includes("buscar cliente") ||
-  lowerText.includes("ver cliente")
-) {
-  await iniciarConsultarCliente(chatId);
-  return;
-}
+    if (respondidoNatural) return;
 
-// VER CLIENTES
-if (lowerText.includes("clientes")) {
-  const clientes = await Cliente.find({
-    tenantId: cobrador.tenantId,
-    cobrador: cobrador._id,
-  }).limit(20);
+    // Fallback IA: solo para preguntas libres que no encajan en los flujos.
+    try {
+      console.log('🔥 IA ACTIVADA');
 
-  let msg = "👥 Lista de Clientes:\n\n";
+      const clientes = await Cliente.find({
+        tenantId: cobrador.tenantId,
+        cobrador: cobrador._id,
+      })
+        .sort({ createdAt: -1 })
+        .limit(50);
 
-  clientes.forEach((c, i) => {
-    msg += `${i + 1}. ${c.nombre}\n`;
-  });
+      const creditos = await Prestamo.find({
+        tenantId: cobrador.tenantId,
+        cobrador: cobrador._id,
+        estado: { $ne: 'pagado' },
+      })
+        .populate('cliente')
+        .sort({ createdAt: -1 })
+        .limit(50);
 
-  await sendMessage(chatId, msg);
-  return;
-}
+      const resumenPrestamos = await resumirPrestamos(creditos);
+      const clienteMencionado = buscarClienteMencionado(text, clientes);
 
-// VER CRÉDITOS
-if (lowerText.includes("creditos") || lowerText.includes("créditos")) {
-  const creditos = await Prestamo.find({
-    tenantId: cobrador.tenantId,
-    cobrador: cobrador._id,
-  }).populate("cliente");
+      let datos = `Fecha de referencia: ${formatearFechaBogota(new Date())}\n`;
+      datos += `Clientes registrados: ${clientes.length}\n`;
+      datos += `Créditos con saldo: ${resumenPrestamos.filter((item) => item.saldoPendiente > 0).length}\n`;
 
-  let msg = "💳 Créditos activos:\n\n";
+      if (clienteMencionado) {
+        datos += `\nCliente mencionado por el usuario: ${clienteMencionado.nombre}\n`;
+        const prestamosCliente = creditos.filter(
+          (prestamo) => String(prestamo.cliente?._id) === String(clienteMencionado._id)
+        );
 
-  creditos.forEach((p, i) => {
-    const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
-    if (saldo > 0) {
-      msg += `${i + 1}. ${p.cliente?.nombre} - $${saldo}\n`;
-    }
-  });
+        if (prestamosCliente.length) {
+          const resumenCliente = await resumirPrestamos(prestamosCliente);
+          datos += `Datos reales del cliente:\n`;
+          resumenCliente.forEach((item, i) => {
+            datos += `- Crédito ${i + 1}: saldo ${formatearMonto(item.saldoPendiente)}, inicio ${formatearFechaBogota(item.fechaPrestamo)}, último movimiento ${formatearFechaBogota(item.fechaReferencia)} (${item.diasDesdeMovimiento ?? 'sin dato'} días)\n`;
+          });
+        }
+      } else {
+        const ranking = [...resumenPrestamos]
+          .filter((item) => item.saldoPendiente > 0)
+          .sort((a, b) => {
+            const da = a.diasDesdeMovimiento ?? -1;
+            const db = b.diasDesdeMovimiento ?? -1;
+            if (db !== da) return db - da;
+            return b.saldoPendiente - a.saldoPendiente;
+          })
+          .slice(0, 5);
 
-  await sendMessage(chatId, msg);
-  return;
-}
-      await enviarMenuPrincipal(chatId, cobrador.nombre || 'Cobrador');
+        if (ranking.length) {
+          datos += `\nTop de cartera real:\n`;
+          ranking.forEach((item, i) => {
+            datos += `- ${i + 1}. ${item.prestamo.cliente?.nombre || 'Sin cliente'}: ${formatearMonto(item.saldoPendiente)} | ${item.diasDesdeMovimiento ?? 'sin dato'} días desde ${item.origenMovimiento}\n`;
+          });
+        }
+      }
+
+      datos += '\nReglas: responde solo lo que el usuario preguntó. Si pregunta por un cliente, no hagas un resumen de toda la cartera. Si falta una fecha, dilo y explica de dónde sale el dato.';
+
+      const respuesta = await responderIA(text, datos);
+      await sendMessage(chatId, respuesta);
+      return;
+    } catch (error) {
+      console.error('❌ ERROR IA:', error.message);
+      await sendMessage(chatId, '❌ Error con la IA');
       return;
     }
-    if (text.toLowerCase() === "si" || text.toLowerCase().includes("si por favor")) {
-  await sendMessage(
-    chatId,
-    "¿Qué necesitas exactamente?\n\n1. Mensajes para cobrar\n2. Estrategia\n3. Lista de clientes"
-  );
-  return;
-}
-
-    // 🔥 IA RESPONDE MENSAJES
-try {
-  console.log("🔥 IA ACTIVADA");
-
-  const clientes = await Cliente.find({
-    tenantId: cobrador.tenantId,
-  }).limit(50);
-
-  const creditos = await Prestamo.find({
-  tenantId: cobrador.tenantId,
-  cobrador: cobrador._id,
-  estado: "activo" // 🔥 SOLO LOS QUE DEBEN
-})
-.populate("cliente")
-.limit(50);
-
- let datos = "CLIENTES:\n";
-
-clientes.forEach(c => {
-  datos += `- ${c.nombre}, Tel: ${c.celular}\n`;
-});
-
-const listaOrdenada = creditos
-  .map(p => ({
-    nombre: p.cliente?.nombre,
-    saldo: (p.totalAPagar || 0) - (p.totalPagado || 0)
-  }))
-  .filter(p => p.saldo > 0)
-  .sort((a, b) => b.saldo - a.saldo);
-
-listaOrdenada.forEach(p => {
-  datos += `- ${p.nombre}: deuda $${p.saldo}\n`;
-});
-datos += "\nAnaliza quién debe más dinero, menciona varios clientes y da recomendaciones.\n";
-datos += "\nTodos los valores de días ya están calculados. No debes inventar ni modificar esos números.\n";
-const hoy = new Date();
-
-datos += "\nCLIENTES EN RIESGO:\n";
-
-creditos.forEach(p => {
-  const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
-
-  if (saldo > 0) {
-    // 1) calculamos días SOLO si hay fecha
-    let fechaBase = null;
-
-if (p.fechaUltimoPago) {
-  fechaBase = new Date(p.fechaUltimoPago);
-} else if (p.createdAt) {
-  fechaBase = new Date(p.createdAt); // 🔥 FECHA DEL PRÉSTAMO
-}
-
-let diasSinPagar = null;
-
-if (fechaBase) {
-  diasSinPagar = Math.floor(
-    (hoy - fechaBase) / (1000 * 60 * 60 * 24)
-  );
-}
-
-if (diasSinPagar !== null && diasSinPagar > 7) {
-  datos += `⚠️ ${p.cliente?.nombre} - ${diasSinPagar} días desde el último movimiento\n`;
-} else if (diasSinPagar === null) {
-  datos += `⚠️ ${p.cliente?.nombre} - sin datos suficientes\n`;
-}
-  }
-});
-datos += "\nPRIORIDAD DE COBRO:\n";
-
-const prioridad = creditos
-  .map(p => {
-    const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
-
-   let fechaBase = null;
-
-if (p.fechaUltimoPago) {
-  fechaBase = new Date(p.fechaUltimoPago);
-} else if (p.createdAt) {
-  fechaBase = new Date(p.createdAt);
-}
-
-let dias = null;
-
-if (fechaBase) {
-  dias = Math.floor(
-    (hoy - fechaBase) / (1000 * 60 * 60 * 24)
-  );
-}
-
-return {
-  nombre: p.cliente?.nombre,
-  saldo,
-  dias,
-  fechaBase // 🔥 IMPORTANTE: PASAMOS LA FECHA
-};
-
-    return {
-      nombre: p.cliente?.nombre,
-      saldo,
-      dias
-    };
-  })
-  .filter(p => p.saldo > 0)
-  // primero los que tienen más días (los que sí tienen fecha)
-  .sort((a, b) => {
-    const da = a.dias ?? -1;
-    const db = b.dias ?? -1;
-    return db - da;
-  })
-  .slice(0, 3);
-
-prioridad.forEach((p, i) => {
-  if (p.dias !== null) {
-    const fechaTexto = p.fechaBase
-      ? p.fechaBase.toLocaleDateString("es-CO")
-      : "fecha desconocida";
-
-    datos += `${i + 1}. ${p.nombre} - ${p.dias} días (desde ${fechaTexto})\n`;
-  } else {
-    datos += `${i + 1}. ${p.nombre} - sin historial de fechas\n`;
-  }
-});
-datos += "\nIMPORTANTE: Nunca inventes días. Usa solo los valores dados. Si no hay días, indica claramente que no hay registro.\n";
- let tipoPregunta = "general";
-
-if (text.includes("cobrar")) tipoPregunta = "cobro";
-if (text.includes("mensaje")) tipoPregunta = "mensaje";
-if (text.includes("resumen")) tipoPregunta = "resumen";
-
-datos += `\nTipo de solicitud: ${tipoPregunta}\n`;
-const respuesta = await responderIA(text, datos);
-
-  await sendMessage(chatId, respuesta);
-  return;
-
-} catch (error) {
-  console.error("❌ ERROR IA:", error.message);
-  await sendMessage(chatId, "❌ Error con la IA");
-  return; // 🔥 ESTE ES EL ARREGLO
-}
   } catch (error) {
     console.error('❌ Error handleMessage:', error.response?.data || error.message);
     throw error;
@@ -1006,20 +1215,14 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
     if (data === 'menu_clientes') {
-      const total = await Cliente.countDocuments({
-        tenantId: cobrador.tenantId,
-        cobrador: cobrador._id,
-      });
-      await sendMessage(chatId, `👥 Tienes <b>${total}</b> clientes registrados.`);
+      const mensajeClientes = await construirMensajeClientes(cobrador);
+      await sendMessage(chatId, mensajeClientes);
       return;
     }
 
     if (data === 'menu_creditos') {
-      const total = await Prestamo.countDocuments({
-        tenantId: cobrador.tenantId,
-        cobrador: cobrador._id,
-      });
-      await sendMessage(chatId, `💳 Tienes <b>${total}</b> créditos registrados.`);
+      const mensajeCreditos = await construirMensajeCreditos(cobrador, 'prioridad');
+      await sendMessage(chatId, mensajeCreditos);
       return;
     }
 
@@ -1036,6 +1239,108 @@ module.exports = {
   handleMessage,
   handleCallbackQuery,
 };
+
+async function manejarConsultaNatural({ chatId, text, cobrador }) {
+  const consulta = normalizarTexto(text);
+
+  if (!consulta) return false;
+
+  if (consulta.includes('crear cliente') || consulta.includes('nuevo cliente')) {
+    await iniciarCrearCliente(chatId);
+    return true;
+  }
+
+  if (
+    consulta.includes('crear credito') ||
+    consulta.includes('nuevo credito') ||
+    consulta.includes('crear prestamo') ||
+    consulta.includes('nuevo prestamo')
+  ) {
+    await iniciarCrearCredito(chatId);
+    return true;
+  }
+
+  if (
+    consulta.includes('registrar pago') ||
+    consulta.includes('registrar abono') ||
+    consulta.includes('nuevo pago') ||
+    consulta.includes('hacer un pago') ||
+    consulta.includes('abonar')
+  ) {
+    await iniciarRegistrarPago(chatId);
+    return true;
+  }
+
+  const clientes = await Cliente.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  })
+    .select('nombre cedula celular direccion estado createdAt')
+    .sort({ createdAt: -1 })
+    .lean();
+
+  const clienteMencionado = buscarClienteMencionado(text, clientes);
+
+  if (clienteMencionado) {
+    const mensajeCliente = await construirMensajeClienteEspecifico(clienteMencionado, cobrador);
+    await sendMessage(chatId, mensajeCliente);
+    return true;
+  }
+
+  if (
+    consulta.includes('consultar cliente') ||
+    consulta.includes('buscar cliente') ||
+    consulta.includes('ver cliente')
+  ) {
+    await iniciarConsultarCliente(chatId);
+    return true;
+  }
+
+  if (
+    consulta.includes('mis clientes') ||
+    consulta === 'clientes' ||
+    consulta.includes('lista de clientes') ||
+    consulta.includes('ver clientes')
+  ) {
+    const mensajeClientes = await construirMensajeClientes(cobrador);
+    await sendMessage(chatId, mensajeClientes);
+    return true;
+  }
+
+  if (
+    consulta.includes('mis creditos') ||
+    consulta === 'creditos' ||
+    consulta.includes('lista de creditos') ||
+    consulta.includes('cartera') ||
+    consulta.includes('deuda') ||
+    consulta.includes('debe') ||
+    consulta.includes('morosos') ||
+    consulta.includes('mora') ||
+    consulta.includes('atraso') ||
+    consulta.includes('prioridad') ||
+    consulta.includes('cuanto debe') ||
+    consulta.includes('quien debe') ||
+    consulta.includes('a quien cobrar') ||
+    consulta.includes('cobrar') ||
+    consulta.includes('cobro') ||
+    consulta.includes('saldo')
+  ) {
+    const mensajeCreditos = await construirMensajeCreditos(cobrador, consulta);
+    await sendMessage(chatId, mensajeCreditos);
+    return true;
+  }
+
+  if (consulta === 'si' || consulta === 'claro' || consulta === 'ok') {
+    await sendMessage(
+      chatId,
+      'Dime exactamente qué necesitas: mis clientes, mis créditos, consultar cliente o registrar pago.'
+    );
+    return true;
+  }
+
+  return false;
+}
+
 async function responderIA(pregunta, datos = "") {
   try {
     const completion = await openai.chat.completions.create({
@@ -1043,19 +1348,19 @@ async function responderIA(pregunta, datos = "") {
       messages: [
   {
     role: "system",
-    content: "Eres un asesor financiero experto en préstamos. Responde como una persona real, de forma natural y variada. No repitas siempre la misma estructura."
+    content: "Eres un asesor financiero experto en préstamos. Responde como una persona real, de forma natural y variada. No repitas siempre la misma estructura ni el mismo saludo."
   },
   {
     role: "system",
-    content: "Usa únicamente los datos proporcionados. Nunca inventes días, fechas o valores. Si falta información, dilo claramente."
+    content: "Usa únicamente los datos proporcionados. Nunca inventes días, fechas o valores. Si falta información, dilo claramente y explica qué dato falta."
   },
   {
     role: "system",
-    content: "Si la pregunta es corta, responde corto. Si el usuario pide algo específico (como mensajes o ayuda), responde solo a eso sin repetir todo el análisis."
+    content: "Si la pregunta es corta, responde corto. Si el usuario pide algo específico (como mensajes o ayuda), responde solo a eso sin repetir todo el análisis de cartera."
   },
   {
     role: "system",
-    content: "IMPORTANTE: Si el usuario pide acciones del sistema como consultar cliente, ver clientes, registrar pago o crear crédito, NO respondas con análisis. Indica claramente qué debe hacer o usa el flujo del sistema."
+    content: "IMPORTANTE: Si el usuario pide acciones del sistema como consultar cliente, ver clientes, registrar pago o crear crédito, NO respondas con análisis. Indica claramente qué debe hacer o usa el flujo del sistema. Si el contexto trae un cliente específico, habla solo de ese cliente."
   },
   {
     role: "system",

@@ -291,7 +291,8 @@ router.post('/pagos', async (req, res) => {
     
     const nuevoTotalPagado = totalPagado + monto;
     prestamo.totalPagado = nuevoTotalPagado;
-    
+    prestamo.ultimoPago = fecha ? new Date(fecha) : new Date();
+
     if (nuevoTotalPagado >= prestamo.totalAPagar) {
       prestamo.estado = 'pagado';
       console.log('🎉 Préstamo marcado como PAGADO');
