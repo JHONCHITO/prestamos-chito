@@ -781,6 +781,7 @@ listaOrdenada.forEach(p => {
   datos += `- ${p.nombre}: deuda $${p.saldo}\n`;
 });
 datos += "\nAnaliza quién debe más dinero, menciona varios clientes y da recomendaciones.\n";
+datos += "\nTodos los valores de días ya están calculados. No debes inventar ni modificar esos números.\n";
 const hoy = new Date();
 
 datos += "\nCLIENTES EN RIESGO:\n";
@@ -790,20 +791,27 @@ creditos.forEach(p => {
 
   if (saldo > 0) {
     // 1) calculamos días SOLO si hay fecha
-    let diasSinPagar = null;
+    let fechaBase = null;
 
-    if (p.fechaUltimoPago) {
-      diasSinPagar = Math.floor(
-        (hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24)
-      );
-    }
+if (p.fechaUltimoPago) {
+  fechaBase = new Date(p.fechaUltimoPago);
+} else if (p.createdAt) {
+  fechaBase = new Date(p.createdAt); // 🔥 FECHA DEL PRÉSTAMO
+}
 
-    // 2) mostramos de forma realista
-    if (diasSinPagar !== null && diasSinPagar > 7) {
-      datos += `⚠️ ${p.cliente?.nombre} - ${diasSinPagar} días sin pagar\n`;
-    } else if (diasSinPagar === null) {
-      datos += `⚠️ ${p.cliente?.nombre} - sin registro de último pago\n`;
-    }
+let diasSinPagar = null;
+
+if (fechaBase) {
+  diasSinPagar = Math.floor(
+    (hoy - fechaBase) / (1000 * 60 * 60 * 24)
+  );
+}
+
+if (diasSinPagar !== null && diasSinPagar > 7) {
+  datos += `⚠️ ${p.cliente?.nombre} - ${diasSinPagar} días desde el último movimiento\n`;
+} else if (diasSinPagar === null) {
+  datos += `⚠️ ${p.cliente?.nombre} - sin datos suficientes\n`;
+}
   }
 });
 datos += "\nPRIORIDAD DE COBRO:\n";
@@ -823,8 +831,17 @@ if (p.fechaUltimoPago) {
 let dias = null;
 
 if (fechaBase) {
-  dias = Math.floor((hoy - fechaBase) / (1000 * 60 * 60 * 24));
+  dias = Math.floor(
+    (hoy - fechaBase) / (1000 * 60 * 60 * 24)
+  );
 }
+
+return {
+  nombre: p.cliente?.nombre,
+  saldo,
+  dias,
+  fechaBase // 🔥 IMPORTANTE: PASAMOS LA FECHA
+};
 
     return {
       nombre: p.cliente?.nombre,
@@ -843,10 +860,14 @@ if (fechaBase) {
 
 prioridad.forEach((p, i) => {
   if (p.dias !== null) {
-  datos += `${i + 1}. ${p.nombre} - ${p.dias} días desde último movimiento\n`;
-} else {
-  datos += `${i + 1}. ${p.nombre} - cliente sin historial de pagos\n`;
-}
+    const fechaTexto = p.fechaBase
+      ? p.fechaBase.toLocaleDateString("es-CO")
+      : "fecha desconocida";
+
+    datos += `${i + 1}. ${p.nombre} - ${p.dias} días (desde ${fechaTexto})\n`;
+  } else {
+    datos += `${i + 1}. ${p.nombre} - sin historial de fechas\n`;
+  }
 });
 datos += "\nIMPORTANTE: Nunca inventes días. Usa solo los valores dados. Si no hay días, indica claramente que no hay registro.\n";
  let tipoPregunta = "general";
@@ -972,23 +993,27 @@ async function responderIA(pregunta, datos = "") {
     const completion = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       messages: [
-        {
-          role: "system",
-          content: "Eres un asesor financiero experto en préstamos. Responde de forma natural y variada, como una persona real. No repitas siempre la misma estructura. Sé directo si la pregunta es simple. Si el usuario pide algo específico (como mensajes o ayuda), responde solo a eso y no repitas todo el análisis. Da respuestas útiles, claras y diferentes cada vez."
-        },
-        {
-  role: "system",
-  content: "Si la pregunta es corta, responde corto. No repitas información innecesaria."
-},
-          {
+  {
     role: "system",
-    content: "Responde en español, usa listas cuando sea necesario y da recomendaciones prácticas."
+    content: "Eres un asesor financiero experto en préstamos. Responde como una persona real, de forma natural y variada. No repitas siempre la misma estructura."
   },
-        {
-          role: "user",
-          content: `Pregunta: ${pregunta}\n\nDatos:\n${datos}`,
-        },
-      ],
+  {
+    role: "system",
+    content: "Usa únicamente los datos proporcionados. Nunca inventes días, fechas o valores. Si falta información, dilo claramente."
+  },
+  {
+    role: "system",
+    content: "Si la pregunta es corta, responde corto. Si el usuario pide algo específico (como mensajes o ayuda), responde solo a eso sin repetir todo el análisis."
+  },
+  {
+    role: "system",
+    content: "Responde en español, usa listas solo cuando sea necesario y da recomendaciones prácticas."
+  },
+  {
+    role: "user",
+    content: `Pregunta: ${pregunta}\n\nDatos:\n${datos}`,
+  }
+],
     });
 
     return completion.choices[0].message.content;
