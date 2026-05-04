@@ -782,12 +782,20 @@ creditos.forEach(p => {
   const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
 
   if (saldo > 0) {
-    const diasSinPagar = p.fechaUltimoPago
-      ? Math.floor((hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24))
-      : 999;
+    // 1) calculamos días SOLO si hay fecha
+    let diasSinPagar = null;
 
-    if (diasSinPagar > 7) {
+    if (p.fechaUltimoPago) {
+      diasSinPagar = Math.floor(
+        (hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24)
+      );
+    }
+
+    // 2) mostramos de forma realista
+    if (diasSinPagar !== null && diasSinPagar > 7) {
       datos += `⚠️ ${p.cliente?.nombre} - ${diasSinPagar} días sin pagar\n`;
+    } else if (diasSinPagar === null) {
+      datos += `⚠️ ${p.cliente?.nombre} - sin registro de último pago\n`;
     }
   }
 });
@@ -796,9 +804,13 @@ datos += "\nPRIORIDAD DE COBRO:\n";
 const prioridad = creditos
   .map(p => {
     const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
-    const dias = p.fechaUltimoPago
-      ? Math.floor((hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24))
-      : 999;
+
+    let dias = null;
+    if (p.fechaUltimoPago) {
+      dias = Math.floor(
+        (hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24)
+      );
+    }
 
     return {
       nombre: p.cliente?.nombre,
@@ -807,11 +819,20 @@ const prioridad = creditos
     };
   })
   .filter(p => p.saldo > 0)
-  .sort((a, b) => b.dias - a.dias)
+  // primero los que tienen más días (los que sí tienen fecha)
+  .sort((a, b) => {
+    const da = a.dias ?? -1;
+    const db = b.dias ?? -1;
+    return db - da;
+  })
   .slice(0, 3);
 
 prioridad.forEach((p, i) => {
-  datos += `${i + 1}. ${p.nombre} - ${p.dias} días sin pagar\n`;
+  if (p.dias !== null) {
+    datos += `${i + 1}. ${p.nombre} - ${p.dias} días sin pagar\n`;
+  } else {
+    datos += `${i + 1}. ${p.nombre} - sin registro de último pago\n`;
+  }
 });
   const respuesta = await responderIA(text, datos);
 
