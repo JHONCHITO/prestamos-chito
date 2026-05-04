@@ -762,16 +762,57 @@ clientes.forEach(c => {
   datos += `- ${c.nombre}, Tel: ${c.celular}\n`;
 });
 
-datos += "\nCRÉDITOS:\n";
+const listaOrdenada = creditos
+  .map(p => ({
+    nombre: p.cliente?.nombre,
+    saldo: (p.totalAPagar || 0) - (p.totalPagado || 0)
+  }))
+  .filter(p => p.saldo > 0)
+  .sort((a, b) => b.saldo - a.saldo);
+
+listaOrdenada.forEach(p => {
+  datos += `- ${p.nombre}: deuda $${p.saldo}\n`;
+});
+datos += "\nAnaliza quién debe más dinero, menciona varios clientes y da recomendaciones.\n";
+const hoy = new Date();
+
+datos += "\nCLIENTES EN RIESGO:\n";
 
 creditos.forEach(p => {
   const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
 
   if (saldo > 0) {
-    datos += `- ${p.cliente?.nombre}: deuda $${saldo}\n`;
+    const diasSinPagar = p.fechaUltimoPago
+      ? Math.floor((hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24))
+      : 999;
+
+    if (diasSinPagar > 7) {
+      datos += `⚠️ ${p.cliente?.nombre} - ${diasSinPagar} días sin pagar\n`;
+    }
   }
 });
+datos += "\nPRIORIDAD DE COBRO:\n";
 
+const prioridad = creditos
+  .map(p => {
+    const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
+    const dias = p.fechaUltimoPago
+      ? Math.floor((hoy - new Date(p.fechaUltimoPago)) / (1000 * 60 * 60 * 24))
+      : 999;
+
+    return {
+      nombre: p.cliente?.nombre,
+      saldo,
+      dias
+    };
+  })
+  .filter(p => p.saldo > 0)
+  .sort((a, b) => b.dias - a.dias)
+  .slice(0, 3);
+
+prioridad.forEach((p, i) => {
+  datos += `${i + 1}. ${p.nombre} - ${p.dias} días sin pagar\n`;
+});
   const respuesta = await responderIA(text, datos);
 
   await sendMessage(chatId, respuesta);
@@ -890,8 +931,12 @@ async function responderIA(pregunta, datos = "") {
       messages: [
         {
           role: "system",
-          content: "Eres un asistente de préstamos llamado Chito. Responde como un asesor humano, claro y profesional.",
+          content: "Eres un asesor financiero experto en préstamos. Analiza los datos cuidadosamente, identifica los clientes con mayor deuda, detecta clientes en riesgo, recomienda a quién cobrar primero y responde de forma clara, profesional y útil como un cobrador experto."
         },
+          {
+    role: "system",
+    content: "Responde en español, usa listas cuando sea necesario y da recomendaciones prácticas."
+  },
         {
           role: "user",
           content: `Pregunta: ${pregunta}\n\nDatos:\n${datos}`,
