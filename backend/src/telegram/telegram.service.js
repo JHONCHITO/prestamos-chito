@@ -736,6 +736,54 @@ const handleMessage = async (message) => {
     }
 
     if (lowerText === 'hola') {
+      // 🔍 INTELIGENCIA: detectar intención del usuario
+
+// CONSULTAR CLIENTE
+if (
+  lowerText.includes("consultar cliente") ||
+  lowerText.includes("buscar cliente") ||
+  lowerText.includes("ver cliente")
+) {
+  await iniciarConsultarCliente(chatId);
+  return;
+}
+
+// VER CLIENTES
+if (lowerText.includes("clientes")) {
+  const clientes = await Cliente.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  }).limit(20);
+
+  let msg = "👥 Lista de Clientes:\n\n";
+
+  clientes.forEach((c, i) => {
+    msg += `${i + 1}. ${c.nombre}\n`;
+  });
+
+  await sendMessage(chatId, msg);
+  return;
+}
+
+// VER CRÉDITOS
+if (lowerText.includes("creditos") || lowerText.includes("créditos")) {
+  const creditos = await Prestamo.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  }).populate("cliente");
+
+  let msg = "💳 Créditos activos:\n\n";
+
+  creditos.forEach((p, i) => {
+    const saldo = (p.totalAPagar || 0) - (p.totalPagado || 0);
+    if (saldo > 0) {
+      msg += `${i + 1}. ${p.cliente?.nombre} - $${saldo}\n`;
+    }
+  });
+
+  await sendMessage(chatId, msg);
+  return;
+}
       await enviarMenuPrincipal(chatId, cobrador.nombre || 'Cobrador');
       return;
     }
@@ -1007,13 +1055,17 @@ async function responderIA(pregunta, datos = "") {
   },
   {
     role: "system",
+    content: "IMPORTANTE: Si el usuario pide acciones del sistema como consultar cliente, ver clientes, registrar pago o crear crédito, NO respondas con análisis. Indica claramente qué debe hacer o usa el flujo del sistema."
+  },
+  {
+    role: "system",
     content: "Responde en español, usa listas solo cuando sea necesario y da recomendaciones prácticas."
   },
   {
     role: "user",
     content: `Pregunta: ${pregunta}\n\nDatos:\n${datos}`,
   }
-],
+]
     });
 
     return completion.choices[0].message.content;
