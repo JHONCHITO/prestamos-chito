@@ -576,7 +576,7 @@ const continuarRegistrarPago = async (chatId, texto, cobrador) => {
 
   return false;
 };
-
+// aqui empiesan los datos mdb
 const confirmarPago = async (chatId, cobrador) => {
   const sesion = getSesion(chatId);
   const d = sesion.data;
@@ -604,7 +604,7 @@ const confirmarPago = async (chatId, cobrador) => {
       await enviarMenuPrincipal(chatId, cobrador.nombre);
       return;
     }
-
+      //aqui se guardan los datos bd
     const pago = new Pago({
       prestamoId: prestamo._id,
       clienteId: d.clienteId,
@@ -643,7 +643,7 @@ const confirmarPago = async (chatId, cobrador) => {
 };
 
 // ════════════════════════════════════════════════════════════════════
-// HANDLERS PRINCIPALES
+// HANDLERS PRINCIPALES resive el mensaje entrante y las aciones del menu 
 // ════════════════════════════════════════════════════════════════════
 const handleMessage = async (message) => {
   try {
@@ -680,7 +680,7 @@ const handleMessage = async (message) => {
       const handled = await continuarLoginCobrador(chatId, text);
       if (handled) return;
     }
-
+//busca las aciones del menu y las ejecuta 
     const cobrador = await obtenerCobrador(chatId, telegramUserId);
 
     if (text === '/start') {
@@ -811,22 +811,59 @@ const handleCallbackQuery = async (callbackQuery) => {
     }
 
     if (data === 'menu_clientes') {
-      const total = await Cliente.countDocuments({
-        tenantId: cobrador.tenantId,
-        cobrador: cobrador._id,
-      });
-      await sendMessage(chatId, `👥 Tienes <b>${total}</b> clientes registrados.`);
-      return;
-    }
+  const clientes = await Cliente.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  }).limit(50);
+
+  if (!clientes.length) {
+    await sendMessage(chatId, "❌ No tienes clientes registrados.");
+    return;
+  }
+
+  let mensaje = "👥 <b>Lista de Clientes:</b>\n\n";
+
+  clientes.forEach((c, i) => {
+    mensaje += `${i + 1}. <b>${c.nombre}</b>\n`;
+    mensaje += `📞 ${c.celular || "Sin celular"}\n`;
+    mensaje += `🏠 ${c.direccion || "Sin dirección"}\n\n`;
+  });
+
+  mensaje += `📊 Total: ${clientes.length} clientes`;
+
+  await sendMessage(chatId, mensaje);
+  return;
+}
 
     if (data === 'menu_creditos') {
-      const total = await Prestamo.countDocuments({
-        tenantId: cobrador.tenantId,
-        cobrador: cobrador._id,
-      });
-      await sendMessage(chatId, `💳 Tienes <b>${total}</b> créditos registrados.`);
-      return;
-    }
+  const creditos = await Prestamo.find({
+    tenantId: cobrador.tenantId,
+    cobrador: cobrador._id,
+  })
+  .populate("cliente")
+  .limit(10);
+
+  if (!creditos.length) {
+    await sendMessage(chatId, "❌ No tienes créditos registrados.");
+    return;
+  }
+
+  let mensaje = "💳 <b>Lista de Créditos:</b>\n\n";
+
+  creditos.forEach((c, i) => {
+    const saldo = Math.max(0, (c.totalAPagar || 0) - (c.totalPagado || 0));
+
+    mensaje += `${i + 1}. 👤 ${c.cliente?.nombre || "Sin nombre"}\n`;
+    mensaje += `💰 $${(c.capital || 0).toLocaleString("es-CO")}\n`;
+    mensaje += `📌 Estado: ${c.estado}\n`;
+    mensaje += `💳 Saldo: $${saldo.toLocaleString("es-CO")}\n\n`;
+  });
+
+  mensaje += `📊 Total: ${creditos.length} créditos`;
+
+  await sendMessage(chatId, mensaje);
+  return;
+}
 
     await sendMessage(chatId, '❓ Opción no reconocida. Usa /menu');
   } catch (error) {
