@@ -336,6 +336,30 @@ export default function CanalesMeta() {
           </Space>
         </Card>
 
+        <Card size="small" title="Que va en cada campo">
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            <Text strong>General</Text>
+            <Text type="secondary">
+              webhookVerifyToken es la clave compartida del webhook. webhookAppSecret es el App Secret de la app de Meta. graphApiVersion normalmente va en v21.0.
+            </Text>
+            <Text strong>WhatsApp</Text>
+            <Text type="secondary">
+              phoneNumberId es el Phone Number ID de WhatsApp Cloud API. businessAccountId es el WABA ID. accessToken debe ser el token permanente. senderId puede ser el mismo phoneNumberId.
+            </Text>
+            <Text strong>Instagram</Text>
+            <Text type="secondary">
+              instagramUserId o pageId identifica la cuenta conectada. accessToken y appSecret deben pertenecer a la misma app de Meta.
+            </Text>
+            <Text strong>Facebook</Text>
+            <Text type="secondary">
+              pageId es la pagina conectada a Messenger. accessToken y appSecret deben coincidir con la app de Meta.
+            </Text>
+            <Text type="secondary">
+              defaultReplyMode: auto = responde solo, auto_then_human = responde y deriva, human_only = solo humano.
+            </Text>
+          </Space>
+        </Card>
+
         <Row gutter={16}>
           <Col xs={24} md={8}>
             {summaryCard('WhatsApp', 'Phone ID', 'whatsapp')}

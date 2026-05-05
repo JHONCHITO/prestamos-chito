@@ -37,8 +37,9 @@ const AdminLayout = ({ children, user, onLogout }) => {
   }, []);
 
   useEffect(() => {
-    const path = location.pathname.substring(1);
-    setSelectedMenu(path || "dashboard");
+    const path = location.pathname.replace(/^\/+/, '');
+    const firstSegment = path.split('/')[0] || 'dashboard';
+    setSelectedMenu(firstSegment);
   }, [location]);
 
   const handleLogout = () => {

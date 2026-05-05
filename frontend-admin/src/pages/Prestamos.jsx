@@ -21,7 +21,7 @@ import {
   EyeOutlined,
   PlusOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import api from '../api/api';
 
@@ -36,14 +36,31 @@ const Prestamos = () => {
   const [saving, setSaving] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingPrestamo, setEditingPrestamo] = useState(null);
+  const [pendingClienteId, setPendingClienteId] = useState('');
   const [form] = Form.useForm();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isNewRoute = location.pathname.endsWith('/nuevo');
 
   useEffect(() => {
     cargarPrestamos();
     cargarClientes();
     cargarCobradores();
   }, []);
+
+  useEffect(() => {
+    if (isNewRoute) {
+      openCreateModal(location.state?.clienteId || '');
+    }
+  }, [isNewRoute, location.state]);
+
+  useEffect(() => {
+    if (modalVisible && pendingClienteId && clientes.length > 0) {
+      form.setFieldsValue({ clienteId: pendingClienteId });
+      autoAsignarCobrador(pendingClienteId);
+      setPendingClienteId('');
+    }
+  }, [modalVisible, pendingClienteId, clientes, form]);
 
   const cargarPrestamos = async () => {
     try {
@@ -109,9 +126,7 @@ const Prestamos = () => {
         message.success('Préstamo creado');
       }
 
-      setModalVisible(false);
-      form.resetFields();
-      setEditingPrestamo(null);
+      closeModal();
       cargarPrestamos();
     } catch (error) {
       message.error(error.response?.data?.error || 'Error al guardar préstamo');
@@ -130,10 +145,22 @@ const Prestamos = () => {
     }
   };
 
-  const openCreateModal = () => {
+  const openCreateModal = (clienteId = '') => {
     setEditingPrestamo(null);
     form.resetFields();
+    setPendingClienteId(clienteId || '');
     setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+    setEditingPrestamo(null);
+    setPendingClienteId('');
+    form.resetFields();
+
+    if (isNewRoute) {
+      navigate('/prestamos');
+    }
   };
 
   const openEditModal = (record) => {
@@ -249,7 +276,7 @@ const Prestamos = () => {
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={openCreateModal}
+            onClick={() => navigate('/prestamos/nuevo')}
           >
             Nuevo Préstamo
           </Button>
@@ -265,11 +292,7 @@ const Prestamos = () => {
       <Modal
         title={editingPrestamo ? 'Editar Préstamo' : 'Nuevo Préstamo'}
         open={modalVisible}
-        onCancel={() => {
-          setModalVisible(false);
-          setEditingPrestamo(null);
-          form.resetFields();
-        }}
+        onCancel={closeModal}
         footer={null}
         width={700}
         destroyOnClose

@@ -8,15 +8,18 @@ import Layout from './components/Layout';
 import Dashboard from './pages/Dashboard';
 import Cobradores from './pages/Cobradores';
 import Clientes from './pages/Clientes';
+import ClienteDetalle from './pages/ClienteDetalle';
 import Cartera from './pages/Cartera';
 import Calendario from './pages/Calendario';
 import Prestamos from './pages/Prestamos';
+import PrestamoDetalle from './pages/PrestamoDetalle';
 import Reportes from './pages/Reportes';
 import Configuracion from './pages/Configuracion';
 import Perfil from './pages/Perfil';
 import EspacioIA from './pages/EspacioIA';
 import BandejaConversaciones from './pages/BandejaConversaciones';
 import CanalesMeta from './pages/CanalesMeta';
+import CobradorDetalle from './pages/CobradorDetalle';
 
 message.config({
   top: 100,
@@ -91,8 +94,12 @@ function App() {
             <Route path="/" element={<Navigate to="/dashboard" />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/prestamos" element={<Prestamos />} />
+            <Route path="/prestamos/nuevo" element={<Prestamos />} />
+            <Route path="/prestamos/:id" element={<PrestamoDetalle />} />
             <Route path="/clientes" element={<Clientes />} />
+            <Route path="/clientes/:id" element={<ClienteDetalle />} />
             <Route path="/cobradores" element={<Cobradores />} />
+            <Route path="/cobradores/:id" element={<CobradorDetalle />} />
             <Route path="/cartera" element={<Cartera />} />
             <Route path="/calendario" element={<Calendario />} />
             <Route path="/reportes" element={<Reportes />} />

@@ -1,28 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Table,
   Button,
-  Space,
-  Modal,
+  Card,
   Form,
   Input,
   message,
+  Modal,
   Popconfirm,
-  Card,
+  Space,
+  Table,
   Typography,
 } from 'antd';
-import {
-  PlusOutlined,
-  EditOutlined,
-  DeleteOutlined,
-  EyeOutlined,
-} from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/api';
 
 const { Title } = Typography;
 
-const Cobradores = () => {
+const formatMoney = (value) => `$${Number(value || 0).toLocaleString('es-CO')}`;
+
+export default function Cobradores() {
   const [cobradores, setCobradores] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -38,23 +35,13 @@ const Cobradores = () => {
     try {
       setLoading(true);
       const response = await api.get('/cobradores');
-      console.log('Respuesta API cobradores:', response);
-      
-      // Normalizar la respuesta para obtener un array
-      let cobradoresData = [];
-      if (Array.isArray(response.data)) {
-        cobradoresData = response.data;
-      } else if (response.data?.data && Array.isArray(response.data.data)) {
-        cobradoresData = response.data.data;
-      } else if (response.data?.cobradores && Array.isArray(response.data.cobradores)) {
-        cobradoresData = response.data.cobradores;
-      }
-      
-      console.log('Cobradores a guardar:', cobradoresData);
-      setCobradores(cobradoresData);
+      const data = Array.isArray(response.data)
+        ? response.data
+        : response.data?.data || response.data?.cobradores || [];
+      setCobradores(data);
     } catch (error) {
-      console.error('Error detallado:', error);
-      message.error('Error al cargar cobradores');
+      console.error('Error cargando cobradores:', error);
+      message.error(error.response?.data?.error || 'Error al cargar cobradores');
     } finally {
       setLoading(false);
     }
@@ -71,12 +58,12 @@ const Cobradores = () => {
         message.success('Cobrador creado');
       }
       setModalVisible(false);
-      form.resetFields();
       setEditingCobrador(null);
+      form.resetFields();
       cargarCobradores();
     } catch (error) {
-      console.error('Error al guardar:', error);
-      message.error('Error al guardar cobrador');
+      console.error('Error al guardar cobrador:', error);
+      message.error(error.response?.data?.error || 'Error al guardar cobrador');
     } finally {
       setLoading(false);
     }
@@ -88,25 +75,37 @@ const Cobradores = () => {
       message.success('Cobrador eliminado');
       cargarCobradores();
     } catch (error) {
-      console.error('Error al eliminar:', error);
-      message.error('Error al eliminar cobrador');
+      console.error('Error al eliminar cobrador:', error);
+      message.error(error.response?.data?.error || 'Error al eliminar cobrador');
     }
   };
 
   const columns = [
     { title: 'Nombre', dataIndex: 'nombre', key: 'nombre' },
     { title: 'Email', dataIndex: 'email', key: 'email' },
-    { title: 'Cédula', dataIndex: 'cedula', key: 'cedula' },
-    { title: 'Teléfono', dataIndex: 'telefono', key: 'telefono' },
+    { title: 'Cedula', dataIndex: 'cedula', key: 'cedula' },
+    { title: 'Telefono', dataIndex: 'telefono', key: 'telefono' },
+    {
+      title: 'Clientes',
+      key: 'clientesCount',
+      render: (_, record) => record.clientesCount ?? 0,
+    },
+    {
+      title: 'Creditos',
+      key: 'prestamosCount',
+      render: (_, record) => record.prestamosCount ?? 0,
+    },
+    {
+      title: 'Cartera',
+      key: 'cartera',
+      render: (_, record) => formatMoney(record.cartera || 0),
+    },
     {
       title: 'Acciones',
       key: 'acciones',
       render: (_, record) => (
         <Space>
-          <Button
-            icon={<EyeOutlined />}
-            onClick={() => navigate(`/cobradores/${record._id}`)}
-          >
+          <Button icon={<EyeOutlined />} onClick={() => navigate(`/cobradores/${record._id}`)}>
             Ver
           </Button>
           <Button
@@ -119,10 +118,7 @@ const Cobradores = () => {
           >
             Editar
           </Button>
-          <Popconfirm
-            title="¿Eliminar?"
-            onConfirm={() => handleEliminar(record._id)}
-          >
+          <Popconfirm title="Eliminar?" onConfirm={() => handleEliminar(record._id)}>
             <Button danger icon={<DeleteOutlined />}>
               Eliminar
             </Button>
@@ -140,6 +136,7 @@ const Cobradores = () => {
             display: 'flex',
             justifyContent: 'space-between',
             marginBottom: 16,
+            gap: 16,
           }}
         >
           <Title level={3}>Cobradores</Title>
@@ -155,12 +152,8 @@ const Cobradores = () => {
             Nuevo Cobrador
           </Button>
         </div>
-        <Table
-          columns={columns}
-          dataSource={cobradores}
-          rowKey="_id"
-          loading={loading}
-        />
+
+        <Table columns={columns} dataSource={cobradores} rowKey="_id" loading={loading} />
       </Card>
 
       <Modal
@@ -172,37 +165,22 @@ const Cobradores = () => {
           form.resetFields();
         }}
         footer={null}
+        destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={handleGuardar}>
-          <Form.Item
-            name="nombre"
-            label="Nombre"
-            rules={[{ required: true }]}
-          >
+          <Form.Item name="nombre" label="Nombre" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item
-            name="email"
-            label="Email"
-            rules={[{ required: true, type: 'email' }]}
-          >
+          <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email' }]}>
             <Input />
           </Form.Item>
-          <Form.Item
-            name="cedula"
-            label="Cédula"
-            rules={[{ required: true }]}
-          >
+          <Form.Item name="cedula" label="Cedula" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="telefono" label="Teléfono">
+          <Form.Item name="telefono" label="Telefono">
             <Input />
           </Form.Item>
-          <Form.Item
-            name="password"
-            label="Contraseña"
-            rules={[{ required: !editingCobrador }]}
-          >
+          <Form.Item name="password" label="Contrasena" rules={[{ required: !editingCobrador }]}>
             <Input.Password />
           </Form.Item>
           <Form.Item>
@@ -214,6 +192,4 @@ const Cobradores = () => {
       </Modal>
     </div>
   );
-};
-
-export default Cobradores;
+}
