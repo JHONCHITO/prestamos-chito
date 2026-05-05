@@ -65,6 +65,9 @@ export default function BandejaConversaciones() {
     () => conversations.find((item) => item.conversationId === selectedConversationId) || null,
     [conversations, selectedConversationId],
   );
+  const selectedConversationFollowUps = Array.isArray(selectedConversation?.followUpQuestions)
+    ? selectedConversation.followUpQuestions.filter(Boolean)
+    : [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -372,12 +375,12 @@ export default function BandejaConversaciones() {
                 </Text>
               </Space>
 
-              {selectedConversation.followUpQuestions?.length ? (
+              {selectedConversationFollowUps.length ? (
                 <>
                   <Divider style={{ margin: '10px 0' }} />
                   <Text strong>Preguntas sugeridas</Text>
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    {selectedConversation.followUpQuestions.map((item) => (
+                    {selectedConversationFollowUps.map((item) => (
                       <Tag key={item} color="geekblue" style={{ whiteSpace: 'normal', width: '100%' }}>
                         {item}
                       </Tag>
