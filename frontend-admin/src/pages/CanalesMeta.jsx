@@ -27,7 +27,7 @@ import {
   ThunderboltOutlined,
   MessageOutlined,
 } from '@ant-design/icons';
-import { metaAPI } from '../services/api';
+import { API_URL, metaAPI } from '../services/api';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -120,6 +120,8 @@ const defaultCampaign = {
   },
 };
 
+const WEBHOOK_URL = `${String(API_URL || '').replace(/\/api\/?$/, '')}/api/meta/webhook`;
+
 export default function CanalesMeta() {
   const [configForm] = Form.useForm();
   const [campaignForm] = Form.useForm();
@@ -175,7 +177,7 @@ export default function CanalesMeta() {
 
   const buildCampaignPayload = (values, autoSend = true) => ({
     ...values,
-    channel: 'whatsapp',
+    channel: values.channel || 'whatsapp',
     autoSend,
   });
 
@@ -323,6 +325,16 @@ export default function CanalesMeta() {
           message="Mensajeria unificada"
           description="Los mensajes entrantes de WhatsApp, Instagram y Facebook pasan por el mismo RAG y quedan visibles en la bandeja de conversacion."
         />
+
+        <Card size="small" title="Datos para conectar Meta">
+          <Space direction="vertical" style={{ width: '100%' }} size={4}>
+            <Text strong>Webhook callback URL</Text>
+            <Input value={WEBHOOK_URL} readOnly />
+            <Text type="secondary">
+              Usa esta URL en Meta Developer. El verify token debe coincidir con el que guardes en la integracion.
+            </Text>
+          </Space>
+        </Card>
 
         <Row gutter={16}>
           <Col xs={24} md={8}>

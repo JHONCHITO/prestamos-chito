@@ -28,6 +28,7 @@ import {
 } from '@ant-design/icons';
 import { metaAPI } from '../../api/api';
 import { getOficinas } from '../../api/superadmin';
+import { API_URL } from '../../api/baseUrl';
 
 const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -120,6 +121,8 @@ const defaultCampaign = {
   },
 };
 
+const WEBHOOK_URL = `${String(API_URL || '').replace(/\/api\/?$/, '')}/api/meta/webhook`;
+
 export default function CanalesMeta() {
   const [configForm] = Form.useForm();
   const [campaignForm] = Form.useForm();
@@ -208,7 +211,7 @@ export default function CanalesMeta() {
 
   const buildCampaignPayload = (values, autoSend = true) => ({
     ...values,
-    channel: 'whatsapp',
+    channel: values.channel || 'whatsapp',
     autoSend,
     targetTenantId: selectedTenantId,
   });
@@ -370,6 +373,16 @@ export default function CanalesMeta() {
           message="Selector de oficina"
           description="Elige la oficina antes de cargar la integracion o crear campanas. Todo se guarda aislado por tenant."
         />
+
+        <Card size="small" title="Datos para conectar Meta">
+          <Space direction="vertical" style={{ width: '100%' }} size={4}>
+            <Text strong>Webhook callback URL</Text>
+            <Input value={WEBHOOK_URL} readOnly />
+            <Text type="secondary">
+              Usa esta URL en Meta Developer. El verify token debe coincidir con el configurado en la oficina seleccionada.
+            </Text>
+          </Space>
+        </Card>
 
         <Card size="small">
           <Space direction="vertical" style={{ width: '100%' }}>
