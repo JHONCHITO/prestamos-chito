@@ -30,4 +30,15 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+export const ragAPI = {
+  chat: async (data) => {
+    const response = await api.post('/rag/chat', data);
+    return response.data;
+  },
+  health: async () => {
+    const response = await api.get('/rag/health');
+    return response.data;
+  },
+};
+
 export default api;

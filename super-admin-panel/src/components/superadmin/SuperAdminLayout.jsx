@@ -34,6 +34,7 @@ import Dashboard from './Dashboard';
 import OficinasManager from './OficinasManager';
 import Reportes from './Reportes';
 import Configuracion from './Configuracion';
+import AsistenteRag from './AsistenteRag';
 import {
   getOficinas,
   cambiarEstadoOficina,
@@ -396,6 +397,8 @@ const SuperAdminLayout = () => {
         return <OficinasManager />;
       case 'reportes':
         return <Reportes />;
+      case 'asistente':
+        return <AsistenteRag />;
       case 'configuracion':
         return <Configuracion />;
       default:
@@ -568,6 +571,11 @@ const SuperAdminLayout = () => {
               key: 'reportes',
               icon: <BarChartOutlined />,
               label: 'Reportes',
+            },
+            {
+              key: 'asistente',
+              icon: <MessageOutlined />,
+              label: 'Asistente IA',
             },
             {
               key: 'configuracion',

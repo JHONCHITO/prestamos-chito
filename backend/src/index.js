@@ -109,6 +109,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({
+  limit: '40mb',
   verify: (req, res, buf) => {
     try {
       JSON.parse(buf);
@@ -177,7 +178,8 @@ const tenantRoutes = [
   '/api/dashboard-charts',
   '/api/cobrador',
   '/api/calendario',
-  '/api/cartera'
+  '/api/cartera',
+  '/api/rag'
 ];
 
 app.use(tenantRoutes, tenantMiddleware);
@@ -193,6 +195,7 @@ app.use('/api/dashboard-charts', require('./routes/dashboardCharts'));
 app.use('/api/cobrador', require('./routes/cobrador.routes'));
 app.use('/api/calendario', require('./routes/calendario'));
 app.use('/api/cartera', require('./routes/cartera'));
+app.use('/api/rag', require('./routes/rag'));
 
 /* CONFIGURACIÓN DE SOCKET.IO */
 const io = socketIo(server, {

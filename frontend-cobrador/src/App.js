@@ -7,6 +7,7 @@ import ClienteDetalle from './pages/ClienteDetalle';
 import Creditos from './pages/Creditos';
 import NuevoCredito from './pages/NuevoCredito';
 import PagarCredito from './pages/PagarCredito';
+import Asistente from './pages/Asistente';
 import { authAPI } from './services/api';
 
 function App() {
@@ -72,6 +73,7 @@ function App() {
         <Route path="/clientes" element={user ? <Clientes user={user} onLogout={handleLogout} /> : <Navigate to="/" />} />
         <Route path="/clientes/:id" element={user ? <ClienteDetalle user={user} onLogout={handleLogout} /> : <Navigate to="/" />} />
         <Route path="/creditos" element={user ? <Creditos user={user} onLogout={handleLogout} /> : <Navigate to="/" />} />
+        <Route path="/asistente" element={user ? <Asistente user={user} onLogout={handleLogout} /> : <Navigate to="/" />} />
         <Route path="/nuevo-credito/:clienteId" element={user ? <NuevoCredito user={user} onLogout={handleLogout} /> : <Navigate to="/" />} />
         <Route path="/pagar/:prestamoId" element={user ? <PagarCredito user={user} onLogout={handleLogout} /> : <Navigate to="/" />} />
       </Routes>

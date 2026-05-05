@@ -54,4 +54,27 @@ api.interceptors.response.use(
   }
 );
 
+export const ragAPI = {
+  chat: async (data) => {
+    const response = await api.post('/rag/chat', data);
+    return response.data;
+  },
+  health: async () => {
+    const response = await api.get('/rag/health');
+    return response.data;
+  },
+  uploadKnowledge: async (data) => {
+    const response = await api.post('/rag/knowledge', data);
+    return response.data;
+  },
+  uploadPdf: async (data) => {
+    const response = await api.post('/rag/pdf', data);
+    return response.data;
+  },
+  documents: async (params) => {
+    const response = await api.get('/rag/documents', { params });
+    return response.data;
+  },
+};
+
 export default api;

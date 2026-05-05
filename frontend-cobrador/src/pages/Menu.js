@@ -45,6 +45,31 @@ export default function Menu({ user, onLogout }) {
         </svg>
       )
     },
+    {
+      label: "Asistente IA",
+      sub: "Consulta con memoria y contexto",
+      path: "/asistente",
+      accent: "#7c3aed",
+      soft: "linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)",
+      border: "rgba(124, 58, 237, 0.12)",
+      icon: (
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            borderRadius: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            fontWeight: 800,
+            color: "currentColor",
+          }}
+        >
+          AI
+        </div>
+      )
+    },
   ];
 
   return (

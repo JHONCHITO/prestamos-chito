@@ -4,6 +4,7 @@ const Cobrador = require('../models/Cobrador');
 const Prestamo = require('../models/Prestamo');
 const Pago = require('../models/Pago');
 const OpenAI = require("openai");
+const { answerRagQuestion } = require('../services/rag.service');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -1136,7 +1137,14 @@ const handleMessage = async (message) => {
 
       datos += '\nReglas: responde solo lo que el usuario preguntó. Si pregunta por un cliente, no hagas un resumen de toda la cartera. Si falta una fecha, dilo y explica de dónde sale el dato.';
 
-      const respuesta = await responderIA(text, datos);
+      const respuesta = await responderIA_RAG(text, datos, {
+        tenantId: cobrador.tenantId,
+        userId: cobrador._id?.toString?.() || String(cobrador._id),
+        userName: cobrador.nombre || '',
+        role: 'cobrador',
+        conversationId: String(chatId),
+        channel: 'telegram',
+      });
       await sendMessage(chatId, respuesta);
       return;
     } catch (error) {
@@ -1339,6 +1347,26 @@ async function manejarConsultaNatural({ chatId, text, cobrador }) {
   }
 
   return false;
+}
+
+async function responderIA_RAG(pregunta, datos = "", contexto = {}) {
+  try {
+    const result = await answerRagQuestion({
+      question: pregunta,
+      tenantId: contexto.tenantId || null,
+      role: contexto.role || 'cobrador',
+      userId: contexto.userId || null,
+      userName: contexto.userName || '',
+      conversationId: contexto.conversationId || '',
+      channel: contexto.channel || 'telegram',
+      manualContext: datos,
+    });
+
+    return result.answer;
+  } catch (error) {
+    console.error("Error IA RAG:", error.message);
+    return "âŒ Error con la IA";
+  }
 }
 
 async function responderIA(pregunta, datos = "") {

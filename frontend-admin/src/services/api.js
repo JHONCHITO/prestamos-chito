@@ -187,4 +187,12 @@ export const reportesAPI = {
   getMensual: (mes, ano) => api.get(`/reportes/mensual?mes=${mes}&año=${ano}`)
 };
 
+export const ragAPI = {
+  chat: (data) => api.post('/rag/chat', data),
+  health: () => api.get('/rag/health'),
+  uploadKnowledge: (data) => api.post('/rag/knowledge', data),
+  uploadPdf: (data) => api.post('/rag/pdf', data),
+  documents: (params) => api.get('/rag/documents', { params }),
+};
+
 export default api;

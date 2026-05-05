@@ -1,0 +1,1965 @@
+const crypto = require('crypto');
+const OpenAI = require('openai');
+const { PDFParse } = require('pdf-parse');
+const mammoth = require('mammoth');
+
+const Cliente = require('../models/Cliente');
+const Prestamo = require('../models/Prestamo');
+const Pago = require('../models/Pago');
+const Tenant = require('../models/Tenant');
+const Sede = require('../models/Sede');
+const RagItem = require('../models/RagItem');
+
+const CHAT_MODEL = process.env.RAG_CHAT_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini';
+const EMBEDDING_MODEL = process.env.RAG_EMBEDDING_MODEL || process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
+const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+const openai = hasOpenAI
+  ? new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    })
+  : null;
+
+const STOP_WORDS = new Set([
+  'a',
+  'al',
+  'algo',
+  'algun',
+  'alguna',
+  'algunas',
+  'alguno',
+  'algunos',
+  'ante',
+  'antes',
+  'con',
+  'como',
+  'contra',
+  'de',
+  'del',
+  'desde',
+  'donde',
+  'e',
+  'el',
+  'ella',
+  'ellas',
+  'ellos',
+  'en',
+  'entre',
+  'es',
+  'esa',
+  'esas',
+  'ese',
+  'eso',
+  'esta',
+  'estas',
+  'este',
+  'esto',
+  'la',
+  'las',
+  'le',
+  'les',
+  'lo',
+  'los',
+  'para',
+  'por',
+  'que',
+  'quien',
+  'quienes',
+  'sin',
+  'sobre',
+  'su',
+  'sus',
+  'tambien',
+  'tan',
+  'te',
+  'tiene',
+  'tienen',
+  'tu',
+  'un',
+  'una',
+  'uno',
+  'unos',
+  'y',
+]);
+
+const MAX_MEMORY_CANDIDATES = 250;
+const MAX_KNOWLEDGE_CANDIDATES = 300;
+const MAX_CONTEXT_CHARS = 12000;
+const MAX_SECTION_CHARS = 1800;
+const MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_SIZE_BYTES = MAX_PDF_SIZE_BYTES;
+
+function safeString(value) {
+  return String(value ?? '').trim();
+}
+
+function normalizeText(value) {
+  return safeString(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function truncateText(value, limit = MAX_SECTION_CHARS) {
+  const text = safeString(value).replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function escapeRegex(value) {
+  return safeString(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function extractTokens(question) {
+  return normalizeText(question)
+    .split(' ')
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+}
+
+function isNumericToken(token) {
+  return /^\d{4,}$/.test(token);
+}
+
+function toNumber(value) {
+  const number = Number(value ?? 0);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function formatCurrency(value) {
+  return `$${toNumber(value).toLocaleString('es-CO')}`;
+}
+
+function formatDate(value) {
+  if (!value) return 'sin fecha';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'sin fecha';
+  return new Intl.DateTimeFormat('es-CO', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+function daysBetween(start, end = new Date()) {
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return 0;
+  }
+  startDate.setHours(0, 0, 0, 0);
+  endDate.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.floor((endDate - startDate) / (1000 * 60 * 60 * 24)));
+}
+
+function calculateBalance(loan) {
+  return Math.max(0, toNumber(loan.totalAPagar) - toNumber(loan.totalPagado));
+}
+
+function calculateOverdueDays(loan) {
+  if (!loan?.fechaVencimiento) return 0;
+  return daysBetween(loan.fechaVencimiento, new Date());
+}
+
+function cosineSimilarity(a = [], b = []) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) {
+    return 0;
+  }
+
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+
+  for (let i = 0; i < length; i += 1) {
+    const av = Number(a[i]) || 0;
+    const bv = Number(b[i]) || 0;
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+
+  if (!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function lexicalScore(question, content) {
+  const tokens = extractTokens(question);
+  if (!tokens.length) return 0;
+
+  const normalizedContent = normalizeText(content);
+  let score = 0;
+
+  for (const token of tokens) {
+    if (normalizedContent.includes(token)) {
+      score += 1 / tokens.length;
+    }
+  }
+
+  if (normalizedContent.includes(normalizeText(question))) {
+    score += 0.35;
+  }
+
+  return Math.min(1, score);
+}
+
+function buildSource({ id, title, type, snippet, score = 0, importance = 0 }) {
+  return {
+    id,
+    title,
+    type,
+    snippet: truncateText(snippet, 420),
+    score,
+    importance,
+  };
+}
+
+function stripBase64DataUrlPrefix(value) {
+  const raw = safeString(value);
+  return raw.replace(/^data:[^;]+;base64,/i, '');
+}
+
+function decodeBase64Buffer(base64Data, maxBytes = MAX_UPLOAD_SIZE_BYTES) {
+  const cleaned = stripBase64DataUrlPrefix(base64Data).replace(/\s+/g, '');
+  if (!cleaned) {
+    throw new Error('El archivo no contiene datos válidos');
+  }
+
+  const buffer = Buffer.from(cleaned, 'base64');
+  if (!buffer.length) {
+    throw new Error('No se pudo leer el archivo');
+  }
+
+  if (buffer.length > maxBytes) {
+    throw new Error('El archivo supera el tamaño máximo permitido de 20 MB');
+  }
+
+  return buffer;
+}
+
+function decodePdfBuffer(base64Data) {
+  const buffer = decodeBase64Buffer(base64Data, MAX_PDF_SIZE_BYTES);
+  const signature = buffer.subarray(0, 4).toString('latin1');
+  if (signature !== '%PDF') {
+    throw new Error('El archivo cargado no parece ser un PDF válido');
+  }
+  return buffer;
+}
+
+function getFileExtension(fileName = '') {
+  const safeName = safeString(fileName).toLowerCase();
+  const match = safeName.match(/\.([a-z0-9]+)$/);
+  return match ? match[1] : '';
+}
+
+function isImageMimeType(mimeType = '', fileName = '') {
+  const normalized = safeString(mimeType).toLowerCase();
+  const ext = getFileExtension(fileName);
+  return (
+    normalized.startsWith('image/') ||
+    ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tif', 'tiff'].includes(ext)
+  );
+}
+
+function isWordMimeType(mimeType = '', fileName = '') {
+  const normalized = safeString(mimeType).toLowerCase();
+  const ext = getFileExtension(fileName);
+  return (
+    normalized === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    normalized === 'application/msword' ||
+    ext === 'docx' ||
+    ext === 'doc'
+  );
+}
+
+function isTextMimeType(mimeType = '', fileName = '') {
+  const normalized = safeString(mimeType).toLowerCase();
+  const ext = getFileExtension(fileName);
+  return (
+    normalized.startsWith('text/') ||
+    ext === 'txt' ||
+    ext === 'md' ||
+    ext === 'csv'
+  );
+}
+
+function detectKnowledgeSourceType({ mimeType = '', fileName = '', rawText = '' }) {
+  if (safeString(rawText)) {
+    return 'text';
+  }
+
+  if (safeString(mimeType).toLowerCase() === 'application/pdf' || getFileExtension(fileName) === 'pdf') {
+    return 'pdf';
+  }
+
+  if (isWordMimeType(mimeType, fileName)) {
+    return 'word';
+  }
+
+  if (isImageMimeType(mimeType, fileName)) {
+    return 'image';
+  }
+
+  if (isTextMimeType(mimeType, fileName)) {
+    return 'text';
+  }
+
+  return 'unknown';
+}
+
+function splitTextIntoChunks(text, maxChars = 1600, overlapChars = 220) {
+  const normalized = safeString(text)
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  const chunks = [];
+  let start = 0;
+
+  while (start < normalized.length) {
+    let end = Math.min(start + maxChars, normalized.length);
+
+    if (end < normalized.length) {
+      const paragraphBoundary = normalized.lastIndexOf('\n\n', end);
+      if (paragraphBoundary > start + Math.floor(maxChars * 0.6)) {
+        end = paragraphBoundary;
+      } else {
+        const sentenceBoundary = normalized.lastIndexOf('. ', end);
+        if (sentenceBoundary > start + Math.floor(maxChars * 0.6)) {
+          end = sentenceBoundary + 1;
+        } else {
+          const spaceBoundary = normalized.lastIndexOf(' ', end);
+          if (spaceBoundary > start + Math.floor(maxChars * 0.6)) {
+            end = spaceBoundary;
+          }
+        }
+      }
+    }
+
+    const chunk = normalized.slice(start, end).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+
+    if (end >= normalized.length) {
+      break;
+    }
+
+    start = Math.max(0, end - overlapChars);
+    while (start < normalized.length && /\s/.test(normalized[start])) {
+      start += 1;
+    }
+  }
+
+  return chunks;
+}
+
+function resolveKnowledgeTenantId({ tenantId, targetTenantId, role }) {
+  if (role === 'superadmin' || role === 'superadministrador') {
+    const requested = safeString(targetTenantId).toLowerCase();
+    return requested || null;
+  }
+
+  return safeString(tenantId).toLowerCase() || null;
+}
+
+async function extractTextFromImageBuffer({ buffer, mimeType = 'image/png', fileName = '' }) {
+  if (!openai) {
+    throw new Error('Para extraer texto de imágenes necesitas configurar OPENAI_API_KEY');
+  }
+
+  const base64 = buffer.toString('base64');
+  const dataUrl = `data:${safeString(mimeType) || 'image/png'};base64,${base64}`;
+  const filenameHint = safeString(fileName) ? `Nombre del archivo: ${fileName}.` : '';
+
+  const completion = await openai.chat.completions.create({
+    model: CHAT_MODEL,
+    temperature: 0,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'Eres un extractor profesional de texto desde imagen.',
+          'Devuelve solo el texto visible, sin explicaciones.',
+          'Conserva saltos de linea, tablas y listas de forma legible.',
+          'Si hay texto parcialmente ilegible, marca [ilegible].',
+        ].join(' '),
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: `Extrae el texto visible de esta imagen. ${filenameHint}`.trim(),
+          },
+          {
+            type: 'image_url',
+            image_url: {
+              url: dataUrl,
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  return safeString(completion.choices?.[0]?.message?.content || '');
+}
+
+async function extractDocumentText({
+  base64Data = '',
+  rawText = '',
+  fileName = '',
+  mimeType = '',
+}) {
+  const sourceType = detectKnowledgeSourceType({
+    mimeType,
+    fileName,
+    rawText,
+  });
+
+  if (sourceType === 'text') {
+    const text = safeString(rawText) || decodeBase64Buffer(base64Data).toString('utf8');
+    return {
+      text: safeString(text),
+      sourceType: 'text',
+      mimeType: safeString(mimeType) || 'text/plain',
+    };
+  }
+
+  const buffer = decodeBase64Buffer(base64Data);
+
+  if (sourceType === 'pdf') {
+    const pdfBuffer = decodePdfBuffer(base64Data);
+    const parser = new PDFParse({ data: pdfBuffer });
+    try {
+      const parsed = await parser.getText();
+      const infoResult = await parser.getInfo({ parsePageInfo: true }).catch(() => null);
+      return {
+        text: safeString(parsed.text || ''),
+        sourceType: 'pdf',
+        mimeType: safeString(mimeType) || 'application/pdf',
+        pageCount: Number.isFinite(infoResult?.total) ? infoResult.total : null,
+        info: infoResult?.info || {},
+      };
+    } finally {
+      await parser.destroy().catch(() => null);
+    }
+  }
+
+  if (sourceType === 'word') {
+    if (getFileExtension(fileName) === 'doc') {
+      throw new Error('El formato .doc no está soportado directamente. Convierte el archivo a .docx para indexarlo.');
+    }
+
+    const result = await mammoth.extractRawText({ buffer });
+    return {
+      text: safeString(result.value || ''),
+      sourceType: 'word',
+      mimeType: safeString(mimeType) || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      info: {
+        messages: result.messages || [],
+      },
+    };
+  }
+
+  if (sourceType === 'image') {
+    const text = await extractTextFromImageBuffer({
+      buffer,
+      mimeType: safeString(mimeType) || 'image/png',
+      fileName,
+    });
+    return {
+      text: safeString(text),
+      sourceType: 'image',
+      mimeType: safeString(mimeType) || 'image/png',
+    };
+  }
+
+  const fallbackText = buffer.toString('utf8').trim();
+  if (fallbackText) {
+    return {
+      text: fallbackText,
+      sourceType: 'text',
+      mimeType: safeString(mimeType) || 'text/plain',
+    };
+  }
+
+  throw new Error('No se pudo determinar cómo extraer texto de este archivo');
+}
+
+function parseJsonPayload(raw) {
+  if (!raw) return {};
+
+  const trimmed = String(raw).trim();
+
+  try {
+    return JSON.parse(trimmed);
+  } catch (firstError) {
+    const cleaned = trimmed.replace(/^```json\s*/i, '').replace(/```$/, '');
+    try {
+      return JSON.parse(cleaned);
+    } catch (secondError) {
+      return {
+        answer: cleaned,
+      };
+    }
+  }
+}
+
+async function createEmbedding(text) {
+  if (!openai) return null;
+
+  const response = await openai.embeddings.create({
+    model: EMBEDDING_MODEL,
+    input: truncateText(text, 6000),
+  });
+
+  return response.data?.[0]?.embedding || null;
+}
+
+function memoryQueryBase({ tenantId, role, userId }) {
+  const query = {
+    isActive: true,
+    kind: { $in: ['conversation', 'memory'] },
+  };
+
+  const scope = [];
+
+  if (tenantId) {
+    scope.push({ tenantId });
+  } else if (role === 'superadmin' || role === 'superadministrador') {
+    scope.push({ tenantId: null });
+  }
+
+  if (userId) {
+    scope.push({ userId: String(userId) });
+  }
+
+  if (scope.length) {
+    query.$or = scope;
+  }
+
+  return query;
+}
+
+async function searchMemoryItems({ question, tenantId, userId, role, conversationId, limit = 5 }) {
+  const query = memoryQueryBase({ tenantId, role, userId });
+
+  if (conversationId) {
+    query.$or = query.$or ? [...query.$or, { conversationId: String(conversationId) }] : [{ conversationId: String(conversationId) }];
+  }
+
+  const candidates = await RagItem.find(query)
+    .sort({ createdAt: -1 })
+    .limit(MAX_MEMORY_CANDIDATES)
+    .lean();
+
+  if (!candidates.length) {
+    return [];
+  }
+
+  let queryEmbedding = null;
+  if (hasOpenAI) {
+    try {
+      queryEmbedding = await createEmbedding(question);
+    } catch (error) {
+      queryEmbedding = null;
+    }
+  }
+
+  const qTokens = extractTokens(question);
+
+  return candidates
+    .map((item) => {
+      const lexical = lexicalScore(question, `${item.title || ''} ${item.summary || item.content || ''}`);
+      const semantic = queryEmbedding && Array.isArray(item.embedding)
+        ? cosineSimilarity(queryEmbedding, item.embedding)
+        : 0;
+      const recencyBoost = item.createdAt ? Math.max(0, 1 - daysBetween(item.createdAt, new Date()) / 365) * 0.05 : 0;
+      const userBoost = userId && String(item.userId || '') === String(userId) ? 0.08 : 0;
+      const conversationBoost = conversationId && String(item.conversationId || '') === String(conversationId) ? 0.06 : 0;
+      const kindBoost = item.kind === 'memory' ? 0.05 : 0.02;
+      const exactBoost = qTokens.some((token) => normalizeText(item.content || '').includes(token)) ? 0.05 : 0;
+
+      const score = (semantic * 0.6) + (lexical * 0.25) + recencyBoost + userBoost + conversationBoost + kindBoost + exactBoost;
+
+      return {
+        ...item,
+        score,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+function knowledgeQueryBase({ tenantId, role }) {
+  const query = {
+    isActive: true,
+    kind: 'knowledge',
+  };
+
+  const scope = [];
+
+  if (tenantId) {
+    scope.push({ tenantId });
+    scope.push({ tenantId: null });
+  } else if (role === 'superadmin' || role === 'superadministrador') {
+    scope.push({ tenantId: null });
+  } else {
+    scope.push({ tenantId: null });
+  }
+
+  if (scope.length) {
+    query.$or = scope;
+  }
+
+  return query;
+}
+
+async function searchKnowledgeItems({ question, tenantId, role, limit = 6 }) {
+  const query = knowledgeQueryBase({ tenantId, role });
+
+  const candidates = await RagItem.find(query)
+    .sort({ createdAt: -1 })
+    .limit(MAX_KNOWLEDGE_CANDIDATES)
+    .lean();
+
+  if (!candidates.length) {
+    return [];
+  }
+
+  let queryEmbedding = null;
+  if (hasOpenAI) {
+    try {
+      queryEmbedding = await createEmbedding(question);
+    } catch (error) {
+      queryEmbedding = null;
+    }
+  }
+
+  return candidates
+    .map((item) => {
+      const combined = `${item.title || ''} ${item.summary || item.content || ''} ${item.metadata?.fileName || ''}`;
+      const lexical = lexicalScore(question, combined);
+      const semantic = queryEmbedding && Array.isArray(item.embedding)
+        ? cosineSimilarity(queryEmbedding, item.embedding)
+        : 0;
+      const recencyBoost = item.createdAt ? Math.max(0, 1 - daysBetween(item.createdAt, new Date()) / 365) * 0.04 : 0;
+      const tenantBoost = tenantId && String(item.tenantId || '') === String(tenantId) ? 0.08 : 0;
+      const globalBoost = item.tenantId ? 0 : 0.03;
+      const exactBoost = extractTokens(question).some((token) => normalizeText(combined).includes(token)) ? 0.06 : 0;
+      const score = (semantic * 0.6) + (lexical * 0.28) + recencyBoost + tenantBoost + globalBoost + exactBoost;
+
+      return {
+        ...item,
+        score,
+      };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+async function findTenantMatch(question) {
+  const tenants = await Tenant.find()
+    .select('nombre tenantId codigoEmpresa estado')
+    .sort({ fechaCreacion: -1 })
+    .limit(150)
+    .lean();
+
+  if (!tenants.length) return null;
+
+  const normalizedQuestion = normalizeText(question);
+  const tokens = extractTokens(question);
+
+  let best = null;
+
+  for (const tenant of tenants) {
+    const haystack = normalizeText(`${tenant.nombre || ''} ${tenant.tenantId || ''} ${tenant.codigoEmpresa || ''}`);
+    let score = lexicalScore(question, haystack);
+
+    if (normalizedQuestion && haystack.includes(normalizedQuestion)) {
+      score += 0.5;
+    }
+
+    for (const token of tokens) {
+      if (haystack.includes(token)) {
+        score += 0.08;
+      }
+    }
+
+    if (!best || score > best.score) {
+      best = {
+        tenant,
+        score,
+      };
+    }
+  }
+
+  if (!best || best.score < 0.15) {
+    return null;
+  }
+
+  return best.tenant;
+}
+
+async function resolveScopeTenantId({ tenantId, targetTenantId, role, question }) {
+  if (targetTenantId) {
+    return safeString(targetTenantId).toLowerCase();
+  }
+
+  if (tenantId) {
+    return safeString(tenantId).toLowerCase();
+  }
+
+  if (role === 'superadmin' || role === 'superadministrador') {
+    const match = await findTenantMatch(question);
+    if (match?.tenantId) {
+      return safeString(match.tenantId).toLowerCase();
+    }
+  }
+
+  return null;
+}
+
+async function buildTenantSnapshot({ tenantId, role, userId }) {
+  const tenantScope = safeString(tenantId).toLowerCase() || null;
+  const isSuperAdmin = role === 'superadmin' || role === 'superadministrador';
+  const filter = {};
+
+  if (tenantScope) {
+    filter.tenantId = tenantScope;
+  }
+
+  if (!isSuperAdmin && userId && role === 'cobrador') {
+    filter.cobrador = userId;
+  }
+
+  const clientQuery = { ...filter };
+  const loanQuery = { ...filter };
+
+  const [
+    tenant,
+    clientCount,
+    activeClients,
+    loanCount,
+    activeLoans,
+    paidLoans,
+    overdueLoanCount,
+    loans,
+    sedes,
+  ] = await Promise.all([
+    tenantScope ? Tenant.findOne({ tenantId: tenantScope }).lean() : null,
+    Cliente.countDocuments(clientQuery),
+    Cliente.countDocuments({ ...clientQuery, estado: { $ne: 'inactivo' } }),
+    Prestamo.countDocuments(loanQuery),
+    Prestamo.countDocuments({ ...loanQuery, estado: 'activo' }),
+    Prestamo.countDocuments({ ...loanQuery, estado: 'pagado' }),
+    Prestamo.countDocuments({ ...loanQuery, estado: 'vencido' }),
+    Prestamo.find(loanQuery)
+      .populate('cliente', 'nombre cedula')
+      .populate('cobrador', 'nombre cedula')
+      .sort({ updatedAt: -1 })
+      .lean(),
+    tenantScope ? Sede.find({ tenantId: tenantScope }).sort({ createdAt: -1 }).lean() : Promise.resolve([]),
+  ]);
+
+  const loanIds = loans.map((loan) => loan._id);
+  const paymentFilter = tenantScope ? { tenantId: tenantScope } : {};
+  if (role === 'cobrador' && userId && loanIds.length) {
+    paymentFilter.prestamoId = { $in: loanIds };
+  }
+
+  const payments = tenantScope
+    ? await Pago.find(paymentFilter).sort({ fecha: -1 }).limit(20).lean()
+    : [];
+
+  const totalCapital = loans.reduce((sum, loan) => sum + toNumber(loan.capital), 0);
+  const totalProgramado = loans.reduce((sum, loan) => sum + toNumber(loan.totalAPagar), 0);
+  const totalRecaudado = loans.reduce((sum, loan) => sum + toNumber(loan.totalPagado), 0);
+  const carteraPendiente = loans.reduce((sum, loan) => sum + calculateBalance(loan), 0);
+  const overdueLoans = loans.filter((loan) => loan.estado !== 'pagado' && calculateOverdueDays(loan) > 0);
+
+  const balanceByClient = new Map();
+  loans.forEach((loan) => {
+    const clientKey = String(loan.cliente?._id || loan.cliente || '');
+    if (!clientKey) return;
+
+    const current = balanceByClient.get(clientKey) || {
+      cliente: loan.cliente || null,
+      balance: 0,
+      loans: 0,
+    };
+
+    current.balance += calculateBalance(loan);
+    current.loans += 1;
+    balanceByClient.set(clientKey, current);
+  });
+
+  const topClients = [...balanceByClient.values()]
+    .sort((a, b) => b.balance - a.balance)
+    .slice(0, 5);
+
+  const recentPayments = payments.slice(0, 8);
+  const recentLoans = [...loans]
+    .sort((a, b) => calculateBalance(b) - calculateBalance(a))
+    .slice(0, 5);
+
+  const title = tenant?.nombre || tenantScope || 'Global';
+  const sectionText = [
+    `Resumen operativo para ${title}.`,
+    tenantScope ? `Tenant ID: ${tenantScope}` : '',
+    `Clientes activos: ${activeClients} de ${clientCount}.`,
+    `Prestamos activos: ${activeLoans} de ${loanCount}.`,
+    `Prestamos pagados: ${paidLoans}.`,
+    `Cartera pendiente total: ${formatCurrency(carteraPendiente)}.`,
+    `Capital colocado: ${formatCurrency(totalCapital)}.`,
+    `Valor programado: ${formatCurrency(totalProgramado)}.`,
+    `Total recaudado: ${formatCurrency(totalRecaudado)}.`,
+    sedes.length ? `Sedes registradas: ${sedes.length}.` : '',
+    overdueLoans.length ? `Prestamos en mora detectados: ${overdueLoans.length}.` : '',
+    '',
+    overdueLoans.length
+      ? `Top de cartera en mora: ${overdueLoans
+          .slice(0, 5)
+          .map((loan, index) => `${index + 1}. ${loan.cliente?.nombre || 'Sin cliente'} - ${formatCurrency(calculateBalance(loan))} - ${calculateOverdueDays(loan)} dias atrasados`)
+          .join(' | ')}`
+      : 'No se detectaron prestamos en mora en el alcance actual.',
+    '',
+    recentPayments.length
+      ? `Pagos recientes: ${recentPayments
+          .map((payment, index) => `${index + 1}. ${formatCurrency(payment.monto)} el ${formatDate(payment.fecha)} (${payment.metodoPago || 'sin metodo'})`)
+          .join(' | ')}`
+      : 'No hay pagos recientes para este alcance.',
+    '',
+    topClients.length
+      ? `Clientes con mayor saldo: ${topClients
+          .map((item, index) => `${index + 1}. ${item.cliente?.nombre || 'Sin nombre'} - ${formatCurrency(item.balance)} en ${item.loans} creditos`)
+          .join(' | ')}`
+      : 'No hay clientes con saldo relevante en este alcance.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const sources = [
+    buildSource({
+      id: tenantScope ? `tenant-summary:${tenantScope}` : 'tenant-summary:global',
+      title: tenantScope ? `Resumen de ${title}` : 'Resumen global',
+      type: 'summary',
+      snippet: sectionText,
+      score: 1,
+      importance: 1,
+    }),
+    ...recentLoans.map((loan) =>
+      buildSource({
+        id: `loan:${loan._id}`,
+        title: `Prestamo ${loan.cliente?.nombre || loan._id}`,
+        type: 'loan',
+        snippet: [
+          `Cliente: ${loan.cliente?.nombre || 'Sin nombre'}`,
+          `Estado: ${loan.estado || 'sin estado'}`,
+          `Saldo: ${formatCurrency(calculateBalance(loan))}`,
+          `Vence: ${formatDate(loan.fechaVencimiento)}`,
+        ].join(' | '),
+        importance: 0.8,
+      }),
+    ),
+  ];
+
+  return {
+    title,
+    text: sectionText,
+    sources,
+    stats: {
+      tenantId: tenantScope,
+      clientCount,
+      activeClients,
+      loanCount,
+      activeLoans,
+      paidLoans,
+      overdueLoans: overdueLoanCount,
+      carteraPendiente,
+      totalCapital,
+      totalProgramado,
+      totalRecaudado,
+    },
+  };
+}
+
+async function buildGlobalSnapshot() {
+  const [
+    tenantCount,
+    activeTenantCount,
+    clientCount,
+    loanCount,
+    activeLoanCount,
+    paidLoanCount,
+    overdueLoanCount,
+    recentTenants,
+    activeTenants,
+  ] = await Promise.all([
+    Tenant.countDocuments(),
+    Tenant.countDocuments({ estado: true }),
+    Cliente.countDocuments(),
+    Prestamo.countDocuments(),
+    Prestamo.countDocuments({ estado: 'activo' }),
+    Prestamo.countDocuments({ estado: 'pagado' }),
+    Prestamo.countDocuments({ estado: 'vencido' }),
+    Tenant.find().sort({ fechaCreacion: -1 }).limit(8).lean(),
+    Tenant.find({ estado: true }).select('nombre tenantId estado fechaCreacion').lean(),
+  ]);
+
+  const aggregate = (await Prestamo.aggregate([
+    {
+      $group: {
+        _id: null,
+        totalRecaudado: { $sum: '$totalPagado' },
+        totalProgramado: { $sum: '$totalAPagar' },
+        totalCapital: { $sum: '$capital' },
+      },
+    },
+  ]))[0] || {
+    totalRecaudado: 0,
+    totalProgramado: 0,
+    totalCapital: 0,
+  };
+
+  const pendingOffices = [];
+  for (const tenant of activeTenants) {
+    const lastPayment = await Pago.findOne({ tenantId: tenant.tenantId }).sort({ fecha: -1 }).lean();
+    const baseDate = lastPayment?.fecha || tenant.fechaCreacion;
+    const dueDate = new Date(baseDate);
+    dueDate.setMonth(dueDate.getMonth() + 1);
+
+    if (dueDate <= new Date()) {
+      pendingOffices.push({
+        tenant,
+        dueDate,
+        daysLate: daysBetween(dueDate, new Date()),
+      });
+    }
+  }
+
+  const text = [
+    'Resumen global del sistema.',
+    `Oficinas registradas: ${tenantCount}.`,
+    `Oficinas activas: ${activeTenantCount}.`,
+    `Clientes totales: ${clientCount}.`,
+    `Prestamos totales: ${loanCount}.`,
+    `Prestamos activos: ${activeLoanCount}.`,
+    `Prestamos pagados: ${paidLoanCount}.`,
+    `Prestamos vencidos: ${overdueLoanCount}.`,
+    `Total capital colocado: ${formatCurrency(aggregate.totalCapital)}.`,
+    `Total programado: ${formatCurrency(aggregate.totalProgramado)}.`,
+    `Total recaudado: ${formatCurrency(aggregate.totalRecaudado)}.`,
+    pendingOffices.length
+      ? `Oficinas con posible atraso: ${pendingOffices
+          .slice(0, 5)
+          .map((item, index) => `${index + 1}. ${item.tenant.nombre} - ${item.daysLate} dias tarde`)
+          .join(' | ')}`
+      : 'No se detectan oficinas con atraso en el barrido reciente.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const sources = [
+    buildSource({
+      id: 'global-summary',
+      title: 'Resumen global',
+      type: 'summary',
+      snippet: text,
+      score: 1,
+      importance: 1,
+    }),
+    ...recentTenants.map((tenant) =>
+      buildSource({
+        id: `tenant:${tenant.tenantId}`,
+        title: tenant.nombre,
+        type: 'tenant',
+        snippet: `Tenant ID: ${tenant.tenantId} | Estado: ${tenant.estado ? 'activo' : 'inactivo'} | Creado: ${formatDate(tenant.fechaCreacion)}`,
+        importance: 0.7,
+      }),
+    ),
+  ];
+
+  return {
+    title: 'Global',
+    text,
+    sources,
+    stats: {
+      tenantCount,
+      activeTenantCount,
+      clientCount,
+      loanCount,
+      activeLoanCount,
+      paidLoanCount,
+      overdueLoanCount,
+      totalCapital: aggregate.totalCapital || 0,
+      totalProgramado: aggregate.totalProgramado || 0,
+      totalRecaudado: aggregate.totalRecaudado || 0,
+    },
+  };
+}
+
+async function buildClientContext({ question, tenantId, role, userId }) {
+  if (!tenantId) {
+    return {
+      text: '',
+      sources: [],
+    };
+  }
+
+  const tokens = extractTokens(question);
+  if (!tokens.length) {
+    return {
+      text: '',
+      sources: [],
+    };
+  }
+
+  const clientFilter = { tenantId };
+  if (role === 'cobrador' && userId) {
+    clientFilter.cobrador = userId;
+  }
+
+  const orConditions = [];
+  const numericTokens = tokens.filter(isNumericToken);
+
+  numericTokens.slice(0, 3).forEach((token) => {
+    orConditions.push({ cedula: { $regex: escapeRegex(token), $options: 'i' } });
+  });
+
+  tokens.slice(0, 5).forEach((token) => {
+    orConditions.push({ nombre: { $regex: escapeRegex(token), $options: 'i' } });
+    orConditions.push({ celular: { $regex: escapeRegex(token), $options: 'i' } });
+    orConditions.push({ telefono: { $regex: escapeRegex(token), $options: 'i' } });
+  });
+
+  if (!orConditions.length) {
+    return {
+      text: '',
+      sources: [],
+    };
+  }
+
+  clientFilter.$or = orConditions;
+
+  const clients = await Cliente.find(clientFilter)
+    .populate('cobrador', 'nombre cedula')
+    .sort({ updatedAt: -1 })
+    .limit(5)
+    .lean();
+
+  if (!clients.length) {
+    return {
+      text: '',
+      sources: [],
+    };
+  }
+
+  const clientIds = clients.map((client) => client._id);
+  const loanFilter = {
+    tenantId,
+    cliente: { $in: clientIds },
+  };
+
+  if (role === 'cobrador' && userId) {
+    loanFilter.cobrador = userId;
+  }
+
+  const loans = await Prestamo.find(loanFilter)
+    .populate('cliente', 'nombre cedula')
+    .populate('cobrador', 'nombre cedula')
+    .sort({ updatedAt: -1 })
+    .limit(15)
+    .lean();
+
+  const payments = await Pago.find({
+    tenantId,
+    clienteId: { $in: clientIds },
+  })
+    .sort({ fecha: -1 })
+    .limit(10)
+    .lean();
+
+  const clientBlocks = clients.map((client, index) => {
+    const relatedLoans = loans.filter((loan) => String(loan.cliente?._id || loan.cliente) === String(client._id));
+    const balance = relatedLoans.reduce((sum, loan) => sum + calculateBalance(loan), 0);
+    const overdue = relatedLoans.filter((loan) => calculateOverdueDays(loan) > 0 && loan.estado !== 'pagado');
+
+    return [
+      `${index + 1}. Cliente: ${client.nombre}`,
+      `   Cedula: ${client.cedula}`,
+      `   Estado: ${client.estado}`,
+      `   Tipo: ${client.tipoCliente || 'nuevo'}`,
+      `   Celular: ${client.celular || client.telefono || 'sin dato'}`,
+      `   Direccion: ${client.direccion || 'sin dato'}`,
+      `   Cobrador: ${client.cobrador?.nombre || 'sin asignar'}`,
+      `   Prestamos activos: ${relatedLoans.length}`,
+      `   Saldo acumulado: ${formatCurrency(balance)}`,
+      overdue.length ? `   En mora: ${overdue.length}` : '   En mora: 0',
+    ].join('\n');
+  });
+
+  const recentPaymentsText = payments.length
+    ? payments
+        .map((payment, index) => `${index + 1}. ${formatCurrency(payment.monto)} el ${formatDate(payment.fecha)} (${payment.metodoPago || 'sin metodo'})`)
+        .join('\n')
+    : 'No hay pagos recientes asociados a los clientes encontrados.';
+
+  const text = [
+    'Contexto de clientes encontrados.',
+    clientBlocks.join('\n\n'),
+    '',
+    'Pagos recientes de los clientes encontrados:',
+    recentPaymentsText,
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const sources = [
+    ...clients.map((client) =>
+      buildSource({
+        id: `client:${client._id}`,
+        title: client.nombre,
+        type: 'client',
+        snippet: `Cedula: ${client.cedula} | Estado: ${client.estado} | Direccion: ${client.direccion || 'sin dato'}`,
+        importance: 0.9,
+      }),
+    ),
+    ...loans.map((loan) =>
+      buildSource({
+        id: `loan:${loan._id}`,
+        title: `Prestamo ${loan.cliente?.nombre || loan._id}`,
+        type: 'loan',
+        snippet: `Saldo: ${formatCurrency(calculateBalance(loan))} | Estado: ${loan.estado || 'sin estado'} | Vence: ${formatDate(loan.fechaVencimiento)}`,
+        importance: 0.8,
+      }),
+    ),
+  ];
+
+  return {
+    text,
+    sources,
+  };
+}
+
+async function buildMemoryContext({ question, tenantId, userId, role, conversationId }) {
+  const memories = await searchMemoryItems({
+    question,
+    tenantId,
+    userId,
+    role,
+    conversationId,
+    limit: 5,
+  });
+
+  if (!memories.length) {
+    return {
+      text: '',
+      sources: [],
+    };
+  }
+
+  const text = memories
+    .map((memory, index) => {
+      const label = memory.kind === 'memory' ? 'Memoria' : 'Conversacion';
+      return `${index + 1}. [${label}] ${memory.title || 'Sin titulo'}\n${truncateText(memory.summary || memory.content, 700)}`;
+    })
+    .join('\n\n');
+
+  const sources = memories.map((memory) =>
+    buildSource({
+      id: `memory:${memory._id}`,
+      title: memory.title || 'Memoria',
+      type: memory.kind,
+      snippet: memory.summary || memory.content,
+      score: memory.score || 0,
+      importance: memory.importance || 0,
+    }),
+  );
+
+  return {
+    text,
+    sources,
+  };
+}
+
+async function buildKnowledgeContext({ question, tenantId, role }) {
+  const knowledge = await searchKnowledgeItems({
+    question,
+    tenantId,
+    role,
+    limit: 6,
+  });
+
+  if (!knowledge.length) {
+    return {
+      text: '',
+      sources: [],
+    };
+  }
+
+  const text = knowledge
+    .map((item, index) => {
+      const label = item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento';
+      const sourceType = item.metadata?.sourceType || item.source || 'knowledge';
+      const chunkLabel = item.metadata?.chunkIndex != null && item.metadata?.totalChunks
+        ? ` (${Number(item.metadata.chunkIndex) + 1}/${Number(item.metadata.totalChunks)})`
+        : '';
+      return `${index + 1}. [${String(sourceType).toUpperCase()}] ${label}${chunkLabel}\n${truncateText(item.summary || item.content, 700)}`;
+    })
+    .join('\n\n');
+
+  const sources = knowledge.map((item) =>
+    buildSource({
+      id: `knowledge:${item._id}`,
+      title: item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento',
+      type: item.metadata?.sourceType || item.source || 'knowledge',
+      snippet: item.summary || item.content,
+      score: item.score || 0,
+      importance: item.importance || 0.6,
+    }),
+  );
+
+  return {
+    text,
+    sources,
+  };
+}
+
+async function listKnowledgeDocuments({ tenantId, targetTenantId, role, limit = 25 }) {
+  const resolvedTenantId = resolveKnowledgeTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+  });
+
+  const query = {
+    isActive: true,
+    kind: 'knowledge',
+  };
+
+  if (resolvedTenantId) {
+    query.$or = [
+      { tenantId: resolvedTenantId },
+      { tenantId: null },
+    ];
+  } else {
+    query.tenantId = null;
+  }
+
+  const items = await RagItem.find(query)
+    .sort({ createdAt: -1 })
+    .limit(500)
+    .lean();
+
+  const documents = [];
+  const bySource = new Map();
+
+  items.forEach((item) => {
+    const scopeKey = String(item.tenantId || 'global').toLowerCase();
+    const sourceKey = String(item.sourceId || item.contentHash || item._id);
+    const mapKey = `${scopeKey}:${sourceKey}`;
+    const existing = bySource.get(mapKey);
+
+    const sourceType = item.metadata?.sourceType || item.source || 'knowledge';
+    const fileName = item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento';
+    const preview = truncateText(item.summary || item.content, 260);
+    const createdAt = item.createdAt ? new Date(item.createdAt).toISOString() : null;
+
+    if (!existing) {
+      bySource.set(mapKey, {
+        sourceId: sourceKey,
+        tenantId: item.tenantId || null,
+        title: fileName,
+        fileName: item.metadata?.fileName || null,
+        originalTitle: item.metadata?.originalTitle || null,
+        sourceType,
+        uploadedBy: item.userName || '',
+        uploadedById: item.userId || null,
+        createdAt,
+        updatedAt: createdAt,
+        pageCount: item.metadata?.pageCount || null,
+        mimeType: item.metadata?.mimeType || null,
+        chunkCount: 1,
+        preview,
+      });
+      return;
+    }
+
+    existing.chunkCount += 1;
+    existing.updatedAt = createdAt || existing.updatedAt;
+    if (!existing.preview && preview) {
+      existing.preview = preview;
+    }
+  });
+
+  bySource.forEach((value) => documents.push(value));
+
+  documents.sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0));
+
+  return {
+    tenantId: resolvedTenantId,
+    documents: documents.slice(0, limit),
+  };
+}
+
+async function ingestPdfKnowledge({
+  base64Data,
+  fileName = '',
+  mimeType = 'application/pdf',
+  tenantId = null,
+  targetTenantId = null,
+  role = '',
+  userId = null,
+  userName = '',
+  title = '',
+  channel = 'web',
+}) {
+  const resolvedTenantId = resolveKnowledgeTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+  });
+
+  if (!resolvedTenantId && !(role === 'superadmin' || role === 'superadministrador')) {
+    throw new Error('No se pudo determinar el tenant para indexar el PDF');
+  }
+
+  const buffer = decodePdfBuffer(base64Data);
+  const fileHash = crypto.createHash('sha1').update(buffer).digest('hex');
+  const existing = await RagItem.findOne({
+    kind: 'knowledge',
+    sourceId: fileHash,
+    isActive: true,
+    ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+  }).lean();
+
+  if (existing) {
+    return {
+      duplicate: true,
+      document: {
+        sourceId: fileHash,
+        tenantId: existing.tenantId || null,
+        title: existing.metadata?.fileName || existing.metadata?.originalTitle || existing.title || fileName || 'Documento PDF',
+        fileName: existing.metadata?.fileName || fileName || null,
+        chunkCount: 0,
+        pageCount: existing.metadata?.pageCount || null,
+        createdAt: existing.createdAt || null,
+        updatedAt: existing.updatedAt || null,
+      },
+      chunksImported: 0,
+      pages: existing.metadata?.pageCount || null,
+    };
+  }
+
+  let extractedText = '';
+  let pageCount = null;
+  let pdfInfo = {};
+  let parser = null;
+
+  try {
+    parser = new PDFParse({ data: buffer });
+    const parsed = await parser.getText();
+    const infoResult = await parser.getInfo({ parsePageInfo: true }).catch(() => null);
+
+    extractedText = safeString(parsed.text || '');
+    pageCount = Number.isFinite(infoResult?.total) ? infoResult.total : null;
+    pdfInfo = infoResult?.info || {};
+  } catch (error) {
+    throw new Error(`No se pudo leer el PDF: ${error.message || 'error desconocido'}`);
+  } finally {
+    if (parser) {
+      await parser.destroy().catch(() => null);
+    }
+  }
+
+  if (!extractedText.trim()) {
+    throw new Error('No se detectó texto extraíble en el PDF. Si es un escaneo, necesitará OCR.');
+  }
+
+  const documentTitle = safeString(title) || safeString(fileName).replace(/\.pdf$/i, '') || 'Documento PDF';
+  const chunks = splitTextIntoChunks(extractedText, 1600, 220);
+
+  if (!chunks.length) {
+    throw new Error('No se pudieron generar fragmentos de texto a partir del PDF');
+  }
+
+  const createdItems = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    const chunkEmbedding = await createEmbedding(chunk).catch(() => null);
+    const chunkContentHash = crypto.createHash('sha1').update(chunk).digest('hex');
+
+    const item = await RagItem.create({
+      tenantId: resolvedTenantId || null,
+      userId: userId ? String(userId) : null,
+      userName: safeString(userName),
+      role: safeString(role),
+      kind: 'knowledge',
+      channel: safeString(channel) || 'web',
+      conversationId: '',
+      source: 'pdf',
+      sourceId: fileHash,
+      title: `${documentTitle}${chunks.length > 1 ? ` - Parte ${i + 1}/${chunks.length}` : ''}`,
+      content: chunk,
+      summary: truncateText(chunk, 1000),
+      metadata: {
+        sourceType: 'pdf',
+        fileName: fileName || `${documentTitle}.pdf`,
+        originalTitle: documentTitle,
+        mimeType,
+        fileHash,
+        pageCount,
+        totalChunks: chunks.length,
+        chunkIndex: i,
+        pdfInfo,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: userName || '',
+      },
+      embedding: chunkEmbedding || undefined,
+      contentHash: chunkContentHash,
+      importance: i === 0 ? 0.9 : 0.65,
+      isActive: true,
+    });
+
+    createdItems.push(item);
+  }
+
+  const firstCreated = createdItems[0];
+
+  return {
+    duplicate: false,
+    document: {
+      sourceId: fileHash,
+      tenantId: resolvedTenantId || null,
+      title: documentTitle,
+      fileName: fileName || `${documentTitle}.pdf`,
+      chunkCount: createdItems.length,
+      pageCount,
+      createdAt: firstCreated?.createdAt || new Date().toISOString(),
+      updatedAt: firstCreated?.updatedAt || new Date().toISOString(),
+      uploadedBy: userName || '',
+    },
+    chunksImported: createdItems.length,
+    pages: pageCount,
+  };
+}
+
+async function storeKnowledgeChunks({
+  resolvedTenantId,
+  userId = null,
+  userName = '',
+  role = '',
+  channel = 'web',
+  sourceType = 'document',
+  mimeType = '',
+  fileName = '',
+  title = '',
+  sourceId = '',
+  extractedText = '',
+  pageCount = null,
+  extraMetadata = {},
+}) {
+  const text = safeString(extractedText);
+
+  if (!text.trim()) {
+    throw new Error('No se detectó texto utilizable en el documento');
+  }
+
+  const existing = await RagItem.findOne({
+    kind: 'knowledge',
+    sourceId,
+    isActive: true,
+    ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+  }).lean();
+
+  if (existing) {
+    return {
+      duplicate: true,
+      document: {
+        sourceId,
+        tenantId: existing.tenantId || null,
+        title: existing.metadata?.fileName || existing.metadata?.originalTitle || existing.title || fileName || title || 'Documento',
+        fileName: existing.metadata?.fileName || fileName || null,
+        sourceType: existing.metadata?.sourceType || existing.source || sourceType,
+        chunkCount: 0,
+        pageCount: existing.metadata?.pageCount || null,
+        createdAt: existing.createdAt || null,
+        updatedAt: existing.updatedAt || null,
+      },
+      chunksImported: 0,
+      pages: existing.metadata?.pageCount || null,
+    };
+  }
+
+  const documentTitle = safeString(title) || safeString(fileName).replace(/\.[^.]+$/, '') || 'Documento';
+  const chunks = splitTextIntoChunks(text, 1600, 220);
+
+  if (!chunks.length) {
+    throw new Error('No se pudieron generar fragmentos de texto a partir del documento');
+  }
+
+  const createdItems = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    const chunk = chunks[i];
+    const chunkEmbedding = await createEmbedding(chunk).catch(() => null);
+    const chunkContentHash = crypto.createHash('sha1').update(chunk).digest('hex');
+
+    const item = await RagItem.create({
+      tenantId: resolvedTenantId || null,
+      userId: userId ? String(userId) : null,
+      userName: safeString(userName),
+      role: safeString(role),
+      kind: 'knowledge',
+      channel: safeString(channel) || 'web',
+      conversationId: '',
+      source: sourceType,
+      sourceId,
+      title: `${documentTitle}${chunks.length > 1 ? ` - Parte ${i + 1}/${chunks.length}` : ''}`,
+      content: chunk,
+      summary: truncateText(chunk, 1000),
+      metadata: {
+        sourceType,
+        fileName: fileName || documentTitle,
+        originalTitle: documentTitle,
+        mimeType: mimeType || '',
+        pageCount,
+        totalChunks: chunks.length,
+        chunkIndex: i,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: userName || '',
+        ...extraMetadata,
+      },
+      embedding: chunkEmbedding || undefined,
+      contentHash: chunkContentHash,
+      importance: i === 0 ? 0.9 : 0.65,
+      isActive: true,
+    });
+
+    createdItems.push(item);
+  }
+
+  const firstCreated = createdItems[0];
+
+  return {
+    duplicate: false,
+    document: {
+      sourceId,
+      tenantId: resolvedTenantId || null,
+      title: documentTitle,
+      fileName: fileName || documentTitle,
+      sourceType,
+      chunkCount: createdItems.length,
+      pageCount,
+      createdAt: firstCreated?.createdAt || new Date().toISOString(),
+      updatedAt: firstCreated?.updatedAt || new Date().toISOString(),
+      uploadedBy: userName || '',
+    },
+    chunksImported: createdItems.length,
+    pages: pageCount,
+  };
+}
+
+async function ingestKnowledgeDocument({
+  base64Data = '',
+  rawText = '',
+  fileName = '',
+  mimeType = '',
+  tenantId = null,
+  targetTenantId = null,
+  role = '',
+  userId = null,
+  userName = '',
+  title = '',
+  channel = 'web',
+}) {
+  const resolvedTenantId = resolveKnowledgeTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+  });
+
+  if (!resolvedTenantId && !(role === 'superadmin' || role === 'superadministrador')) {
+    throw new Error('No se pudo determinar el tenant para indexar el documento');
+  }
+
+  const extracted = await extractDocumentText({
+    base64Data,
+    rawText,
+    fileName,
+    mimeType,
+  });
+
+  const sourceSeed = extracted.sourceType === 'text'
+    ? safeString(rawText || extracted.text)
+    : decodeBase64Buffer(base64Data);
+
+  const sourceId = crypto.createHash('sha1').update(sourceSeed).digest('hex');
+
+  return storeKnowledgeChunks({
+    resolvedTenantId,
+    userId,
+    userName,
+    role,
+    channel,
+    sourceType: extracted.sourceType,
+    mimeType: extracted.mimeType || mimeType || '',
+    fileName: fileName || title || extracted.sourceType,
+    title: title || fileName || extracted.sourceType,
+    sourceId,
+    extractedText: extracted.text,
+    pageCount: extracted.pageCount || null,
+    extraMetadata: {
+      extractionInfo: extracted.info || {},
+    },
+  });
+}
+
+async function buildOperationalContext({ question, tenantId, targetTenantId, role, userId, conversationId, manualContext = '' }) {
+  const resolvedTenantId = await resolveScopeTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+    question,
+  });
+
+  const sections = [];
+  const sources = [];
+
+  if (resolvedTenantId) {
+    const snapshot = await buildTenantSnapshot({
+      tenantId: resolvedTenantId,
+      role,
+      userId,
+    });
+
+    if (snapshot.text) {
+      sections.push(`### Resumen operativo\n${snapshot.text}`);
+      sources.push(...snapshot.sources);
+    }
+  } else {
+    const globalSnapshot = await buildGlobalSnapshot();
+    if (globalSnapshot.text) {
+      sections.push(`### Resumen global\n${globalSnapshot.text}`);
+      sources.push(...globalSnapshot.sources);
+    }
+  }
+
+  const knowledgeContext = await buildKnowledgeContext({
+    question,
+    tenantId: resolvedTenantId,
+    role,
+  });
+
+  if (knowledgeContext.text) {
+    sections.push(`### Conocimiento recuperado\n${knowledgeContext.text}`);
+    sources.push(...knowledgeContext.sources);
+  }
+
+  const clientContext = await buildClientContext({
+    question,
+    tenantId: resolvedTenantId,
+    role,
+    userId,
+  });
+
+  if (clientContext.text) {
+    sections.push(`### Detalle de clientes\n${clientContext.text}`);
+    sources.push(...clientContext.sources);
+  }
+
+  const memoryContext = await buildMemoryContext({
+    question,
+    tenantId: resolvedTenantId,
+    userId,
+    role,
+    conversationId,
+  });
+
+  if (memoryContext.text) {
+    sections.push(`### Memoria relevante\n${memoryContext.text}`);
+    sources.push(...memoryContext.sources);
+  }
+
+  if (manualContext && safeString(manualContext)) {
+    const manualText = truncateText(manualContext, 4000);
+    sections.push(`### Contexto adicional\n${manualText}`);
+    sources.push(
+      buildSource({
+        id: 'manual-context',
+        title: 'Contexto adicional',
+        type: 'manual',
+        snippet: manualText,
+        importance: 0.9,
+      }),
+    );
+  }
+
+  const joined = sections.join('\n\n---\n\n');
+  const trimmed = joined.length > MAX_CONTEXT_CHARS ? joined.slice(0, MAX_CONTEXT_CHARS) : joined;
+
+  return {
+    tenantId: resolvedTenantId,
+    text: trimmed,
+    sources: sources.slice(0, 14),
+  };
+}
+
+function shouldPersistMemory(question, answer, memorySummary) {
+  if (safeString(memorySummary)) return true;
+  const cues = /recuerda|prefiero|siempre|nunca|ten en cuenta|a partir de ahora|guarda|memoria|nota|anota/i;
+  return cues.test(question) || cues.test(answer);
+}
+
+async function storeConversationMemory({
+  tenantId,
+  userId,
+  userName,
+  role,
+  question,
+  answer,
+  conversationId,
+  channel,
+  memorySummary,
+  sources = [],
+  followUpQuestions = [],
+}) {
+  const turnContent = truncateText(`Pregunta: ${question}\nRespuesta: ${answer}`, 2200);
+  const turnEmbedding = await createEmbedding(turnContent).catch(() => null);
+  const important = shouldPersistMemory(question, answer, memorySummary);
+
+  const conversationDoc = {
+    tenantId: tenantId || null,
+    userId: userId ? String(userId) : null,
+    userName: safeString(userName),
+    role: safeString(role),
+    kind: 'conversation',
+    channel: safeString(channel) || 'web',
+    conversationId: safeString(conversationId),
+    source: safeString(channel) || 'web',
+    title: truncateText(question, 90),
+    content: turnContent,
+    summary: truncateText(memorySummary || answer, 900),
+    metadata: {
+      sourceCount: sources.length,
+      followUpQuestions,
+      important,
+    },
+    embedding: turnEmbedding || undefined,
+    contentHash: crypto.createHash('sha1').update(turnContent).digest('hex'),
+    importance: important ? 0.8 : 0.2,
+    isActive: true,
+  };
+
+  await RagItem.create(conversationDoc);
+
+  let memoryStored = false;
+
+  if (important && safeString(memorySummary)) {
+    const memoryContent = truncateText(memorySummary, 1000);
+    const memoryEmbedding = await createEmbedding(memoryContent).catch(() => null);
+
+    await RagItem.create({
+      tenantId: tenantId || null,
+      userId: userId ? String(userId) : null,
+      userName: safeString(userName),
+      role: safeString(role),
+      kind: 'memory',
+      channel: safeString(channel) || 'web',
+      conversationId: safeString(conversationId),
+      source: safeString(channel) || 'web',
+      title: truncateText(question, 90),
+      content: memoryContent,
+      summary: memoryContent,
+      metadata: {
+        sourceCount: sources.length,
+        followUpQuestions,
+        memorySummary: memoryContent,
+      },
+      embedding: memoryEmbedding || undefined,
+      contentHash: crypto.createHash('sha1').update(memoryContent).digest('hex'),
+      importance: 1,
+      isActive: true,
+    });
+
+    memoryStored = true;
+  }
+
+  return {
+    memoryStored,
+    conversationStored: true,
+  };
+}
+
+function buildFallbackAnswer({ question, contextText, sources }) {
+  const lines = [];
+  lines.push('No tengo la IA de OpenAI disponible en este entorno, pero esto es lo que encontre.');
+  lines.push('');
+  lines.push(`Pregunta: ${question}`);
+  if (contextText) {
+    lines.push('');
+    lines.push('Contexto recuperado:');
+    lines.push(contextText);
+  }
+
+  if (sources.length) {
+    lines.push('');
+    lines.push('Fuentes principales:');
+    sources.slice(0, 5).forEach((source, index) => {
+      lines.push(`${index + 1}. ${source.title} - ${source.snippet}`);
+    });
+  }
+
+  return lines.join('\n');
+}
+
+async function answerRagQuestion({
+  question,
+  tenantId,
+  targetTenantId = null,
+  role = '',
+  userId = null,
+  userName = '',
+  conversationId = '',
+  channel = 'web',
+  manualContext = '',
+}) {
+  const cleanQuestion = safeString(question);
+  if (!cleanQuestion) {
+    throw new Error('La pregunta es obligatoria');
+  }
+
+  const effectiveConversationId = safeString(conversationId) || crypto.randomUUID();
+
+  const context = await buildOperationalContext({
+    question: cleanQuestion,
+    tenantId,
+    targetTenantId,
+    role,
+    userId,
+    conversationId: effectiveConversationId,
+    manualContext,
+  });
+
+  const systemPrompt = [
+    'Eres el asistente RAG profesional de Prestamos Chito.',
+    'Respondes solo con informacion respaldada por el contexto recuperado o por memoria relevante.',
+    'Los documentos cargados, incluyendo PDF, Word, imagen y texto, forman parte del contexto recuperado y puedes citarlos cuando sean relevantes.',
+    'Si faltan datos, dilo claramente y pide el dato faltante.',
+    'No inventes clientes, saldos, fechas ni estados.',
+    'Si la pregunta trata sobre un cliente o prestamo concreto, enfocate solo en ese caso.',
+    'Si el usuario pide una preferencia duradera o una nota importante, resume esa informacion en memory_summary.',
+    'Devuelve un JSON valido con esta forma exacta:',
+    '{ "answer": "texto para el usuario", "memory_summary": "nota corta o vacia", "follow_up_questions": ["..."], "used_context_ids": ["..."] }',
+    'El texto debe ser en espanol y profesional.',
+  ].join(' ');
+
+  let parsed = {};
+  let rawContent = '';
+
+  if (openai) {
+    try {
+      const completion = await openai.chat.completions.create({
+        model: CHAT_MODEL,
+        temperature: 0.2,
+        response_format: {
+          type: 'json_object',
+        },
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: JSON.stringify(
+              {
+                question: cleanQuestion,
+                tenantId: context.tenantId,
+                role,
+                userId: userId ? String(userId) : null,
+                conversationId: effectiveConversationId,
+                context: context.text,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      });
+
+      rawContent = completion.choices?.[0]?.message?.content || '';
+      parsed = parseJsonPayload(rawContent);
+    } catch (error) {
+      parsed = {};
+    }
+  }
+
+  const answer = truncateText(
+    parsed.answer || parsed.respuesta || rawContent || buildFallbackAnswer({
+      question: cleanQuestion,
+      contextText: context.text,
+      sources: context.sources,
+    }),
+    4000,
+  );
+
+  const memorySummary = truncateText(parsed.memory_summary || parsed.resumen_memoria || '', 1000);
+  const followUpQuestions = Array.isArray(parsed.follow_up_questions)
+    ? parsed.follow_up_questions.map((item) => safeString(item)).filter(Boolean).slice(0, 3)
+    : [];
+  const usedContextIds = Array.isArray(parsed.used_context_ids)
+    ? parsed.used_context_ids.map((item) => safeString(item)).filter(Boolean).slice(0, 10)
+    : context.sources.map((item) => item.id);
+
+  const memoryResult = await storeConversationMemory({
+    tenantId: context.tenantId || null,
+    userId,
+    userName,
+    role,
+    question: cleanQuestion,
+    answer,
+    conversationId: effectiveConversationId,
+    channel,
+    memorySummary,
+    sources: context.sources,
+    followUpQuestions,
+  }).catch(() => ({
+    memoryStored: false,
+    conversationStored: false,
+  }));
+
+  return {
+    answer,
+    memorySummary,
+    followUpQuestions,
+    usedContextIds,
+    sources: context.sources,
+    contextText: context.text,
+    tenantId: context.tenantId,
+    memoryStored: memoryResult.memoryStored,
+    conversationStored: memoryResult.conversationStored,
+    conversationId: effectiveConversationId,
+    fallbackMode: !openai,
+  };
+}
+
+module.exports = {
+  answerRagQuestion,
+  buildOperationalContext,
+  buildGlobalSnapshot,
+  buildTenantSnapshot,
+  ingestKnowledgeDocument,
+  searchMemoryItems,
+  searchKnowledgeItems,
+  listKnowledgeDocuments,
+  ingestPdfKnowledge,
+  resolveScopeTenantId,
+  resolveKnowledgeTenantId,
+};
