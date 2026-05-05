@@ -202,4 +202,14 @@ export const ragAPI = {
   speakText: (data) => api.post('/rag/audio/speech', data),
 };
 
+export const metaAPI = {
+  getConfig: (params) => api.get('/meta/config', { params }),
+  saveConfig: (data) => api.put('/meta/config', data),
+  listCampaigns: (params) => api.get('/meta/campaigns', { params }),
+  getCampaign: (campaignId, params) => api.get(`/meta/campaigns/${campaignId}`, { params }),
+  previewCampaign: (data) => api.post('/meta/campaigns/preview', data),
+  createCampaign: (data) => api.post('/meta/campaigns', data),
+  sendCampaign: (campaignId, data) => api.post(`/meta/campaigns/${campaignId}/send`, data),
+};
+
 export default api;

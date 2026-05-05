@@ -16,6 +16,7 @@ import Configuracion from './pages/Configuracion';
 import Perfil from './pages/Perfil';
 import EspacioIA from './pages/EspacioIA';
 import BandejaConversaciones from './pages/BandejaConversaciones';
+import CanalesMeta from './pages/CanalesMeta';
 
 message.config({
   top: 100,
@@ -95,6 +96,7 @@ function App() {
             <Route path="/cartera" element={<Cartera />} />
             <Route path="/calendario" element={<Calendario />} />
             <Route path="/reportes" element={<Reportes />} />
+            <Route path="/canales-meta" element={<CanalesMeta />} />
             <Route path="/asistente" element={<EspacioIA />} />
             <Route path="/bandeja" element={<BandejaConversaciones />} />
             <Route path="/configuracion" element={<Configuracion />} />

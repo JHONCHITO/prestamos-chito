@@ -13,6 +13,7 @@ import {
   BankOutlined,
   MessageOutlined,
   InboxOutlined,
+  GlobalOutlined,
 } from "@ant-design/icons";
 import { useNavigate, useLocation } from "react-router-dom";
 import Notificaciones from "./Notificaciones";
@@ -53,6 +54,7 @@ const AdminLayout = ({ children, user, onLogout }) => {
     { key: "cartera", icon: <WalletOutlined />, label: "Cartera" },
     { key: "calendario", icon: <CalendarOutlined />, label: "Calendario" },
     { key: "reportes", icon: <FileTextOutlined />, label: "Reportes" },
+    { key: "canales-meta", icon: <GlobalOutlined />, label: "Canales Meta" },
     { key: "asistente", icon: <MessageOutlined />, label: "Espacio IA" },
     { key: "bandeja", icon: <InboxOutlined />, label: "Call Center IA" },
     { key: "configuracion", icon: <SettingOutlined />, label: "Configuración" },

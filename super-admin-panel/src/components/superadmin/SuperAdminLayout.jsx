@@ -28,6 +28,7 @@ import {
   WarningOutlined,
   MessageOutlined,
   CheckCircleOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import Dashboard from './Dashboard';
@@ -36,6 +37,7 @@ import Reportes from './Reportes';
 import Configuracion from './Configuracion';
 import EspacioIA from './EspacioIA';
 import BandejaConversaciones from './BandejaConversaciones';
+import CanalesMeta from './CanalesMeta';
 import { SOCKET_URL } from '../../api/baseUrl';
 import {
   getOficinas,
@@ -398,6 +400,8 @@ const SuperAdminLayout = () => {
         return <OficinasManager />;
       case 'reportes':
         return <Reportes />;
+      case 'canales-meta':
+        return <CanalesMeta />;
       case 'asistente':
         return <EspacioIA />;
       case 'bandeja':
@@ -574,6 +578,11 @@ const SuperAdminLayout = () => {
               key: 'reportes',
               icon: <BarChartOutlined />,
               label: 'Reportes',
+            },
+            {
+              key: 'canales-meta',
+              icon: <GlobalOutlined />,
+              label: 'Canales Meta',
             },
             {
               key: 'asistente',

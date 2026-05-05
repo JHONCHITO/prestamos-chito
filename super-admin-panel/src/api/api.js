@@ -103,4 +103,35 @@ export const ragAPI = {
   },
 };
 
+export const metaAPI = {
+  getConfig: async (params) => {
+    const response = await api.get('/meta/config', { params });
+    return response.data;
+  },
+  saveConfig: async (data) => {
+    const response = await api.put('/meta/config', data);
+    return response.data;
+  },
+  listCampaigns: async (params) => {
+    const response = await api.get('/meta/campaigns', { params });
+    return response.data;
+  },
+  getCampaign: async (campaignId, params) => {
+    const response = await api.get(`/meta/campaigns/${campaignId}`, { params });
+    return response.data;
+  },
+  previewCampaign: async (data) => {
+    const response = await api.post('/meta/campaigns/preview', data);
+    return response.data;
+  },
+  createCampaign: async (data) => {
+    const response = await api.post('/meta/campaigns', data);
+    return response.data;
+  },
+  sendCampaign: async (campaignId, data) => {
+    const response = await api.post(`/meta/campaigns/${campaignId}/send`, data);
+    return response.data;
+  },
+};
+
 export default api;

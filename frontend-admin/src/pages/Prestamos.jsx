@@ -1,37 +1,39 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  Table,
   Button,
-  Space,
-  Modal,
+  Card,
+  DatePicker,
   Form,
   Input,
-  Select,
-  message,
-  Popconfirm,
-  Tag,
-  Card,
-  Typography,
   InputNumber,
-  DatePicker,
+  message,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
 } from 'antd';
 import {
-  PlusOutlined,
-  EditOutlined,
   DeleteOutlined,
+  EditOutlined,
   EyeOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import api from '../api/api';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
 const { Option } = Select;
 
 const Prestamos = () => {
   const [prestamos, setPrestamos] = useState([]);
   const [clientes, setClientes] = useState([]);
+  const [cobradores, setCobradores] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingPrestamo, setEditingPrestamo] = useState(null);
   const [form] = Form.useForm();
@@ -40,16 +42,16 @@ const Prestamos = () => {
   useEffect(() => {
     cargarPrestamos();
     cargarClientes();
+    cargarCobradores();
   }, []);
 
   const cargarPrestamos = async () => {
     try {
       setLoading(true);
       const response = await api.get('/prestamos');
-      // ajusta si tu backend devuelve { prestamos: [...] }
-      setPrestamos(response.data);
+      setPrestamos(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      message.error('Error al cargar préstamos');
+      message.error(error.response?.data?.error || 'Error al cargar préstamos');
     } finally {
       setLoading(false);
     }
@@ -58,35 +60,63 @@ const Prestamos = () => {
   const cargarClientes = async () => {
     try {
       const response = await api.get('/clientes');
-      setClientes(response.data);
+      setClientes(Array.isArray(response.data) ? response.data : []);
     } catch (error) {
-      console.error('Error cargando clientes');
+      console.error('Error cargando clientes:', error);
+    }
+  };
+
+  const cargarCobradores = async () => {
+    try {
+      const response = await api.get('/cobradores');
+      const data = Array.isArray(response.data)
+        ? response.data
+        : response.data?.data || response.data?.cobradores || [];
+      setCobradores(data.filter((item) => item.estado !== 'inactivo'));
+    } catch (error) {
+      console.error('Error cargando cobradores:', error);
+    }
+  };
+
+  const autoAsignarCobrador = (clienteId) => {
+    const cliente = clientes.find((item) => item._id === clienteId);
+    const cobradorId = cliente?.cobrador?._id || cliente?.cobrador || '';
+    if (cobradorId) {
+      form.setFieldsValue({ cobradorId });
     }
   };
 
   const handleGuardar = async (values) => {
     try {
-      setLoading(true);
-      const data = {
-        ...values,
-        fechaInicio: values.fechaInicio?.toISOString(),
-        fechaVencimiento: values.fechaVencimiento?.toISOString(),
+      setSaving(true);
+
+      const payload = {
+        clienteId: values.clienteId,
+        cobradorId: values.cobradorId,
+        capital: values.capital,
+        interes: values.interes,
+        numeroCuotas: values.plazo,
+        fechaInicio: values.fechaInicio ? values.fechaInicio.toISOString() : undefined,
+        fechaVencimiento: values.fechaVencimiento ? values.fechaVencimiento.toISOString() : undefined,
+        notas: values.notas || '',
       };
+
       if (editingPrestamo) {
-        await api.put(`/prestamos/${editingPrestamo._id}`, data);
+        await api.put(`/prestamos/${editingPrestamo._id}`, payload);
         message.success('Préstamo actualizado');
       } else {
-        await api.post('/prestamos', data);
+        await api.post('/prestamos', payload);
         message.success('Préstamo creado');
       }
+
       setModalVisible(false);
       form.resetFields();
       setEditingPrestamo(null);
       cargarPrestamos();
     } catch (error) {
-      message.error('Error al guardar préstamo');
+      message.error(error.response?.data?.error || 'Error al guardar préstamo');
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
@@ -96,34 +126,59 @@ const Prestamos = () => {
       message.success('Préstamo eliminado');
       cargarPrestamos();
     } catch (error) {
-      message.error('Error al eliminar préstamo');
+      message.error(error.response?.data?.error || 'Error al eliminar préstamo');
     }
+  };
+
+  const openCreateModal = () => {
+    setEditingPrestamo(null);
+    form.resetFields();
+    setModalVisible(true);
+  };
+
+  const openEditModal = (record) => {
+    setEditingPrestamo(record);
+    form.setFieldsValue({
+      clienteId: record.cliente?._id || record.cliente || '',
+      cobradorId: record.cobrador?._id || record.cobrador || '',
+      capital: record.capital,
+      interes: record.interes,
+      plazo: record.numeroCuotas || record.plazo || 30,
+      fechaInicio: record.fechaInicio ? dayjs(record.fechaInicio) : null,
+      fechaVencimiento: record.fechaVencimiento ? dayjs(record.fechaVencimiento) : null,
+      notas: record.notas || '',
+    });
+    setModalVisible(true);
   };
 
   const columns = [
     {
       title: 'Cliente',
-      dataIndex: ['cliente', 'nombre'],
       key: 'cliente',
       render: (_, record) => record.cliente?.nombre || 'N/A',
+    },
+    {
+      title: 'Cobrador',
+      key: 'cobrador',
+      render: (_, record) => record.cobrador?.nombre || 'N/A',
     },
     {
       title: 'Capital',
       dataIndex: 'capital',
       key: 'capital',
-      render: (val) => `$${val?.toLocaleString() || 0}`,
+      render: (val) => `$${Number(val || 0).toLocaleString('es-CO')}`,
     },
     {
       title: 'Interés',
       dataIndex: 'interes',
       key: 'interes',
-      render: (val) => `$${val?.toLocaleString() || 0}`,
+      render: (val) => `${Number(val || 0).toLocaleString('es-CO')}%`,
     },
     {
       title: 'Total',
-      dataIndex: 'total',
-      key: 'total',
-      render: (val) => `$${val?.toLocaleString() || 0}`,
+      dataIndex: 'totalAPagar',
+      key: 'totalAPagar',
+      render: (val) => `$${Number(val || 0).toLocaleString('es-CO')}`,
     },
     {
       title: 'Estado',
@@ -139,7 +194,7 @@ const Prestamos = () => {
               : 'red'
           }
         >
-          {estado?.toUpperCase()}
+          {String(estado || '').toUpperCase()}
         </Tag>
       ),
     },
@@ -157,19 +212,7 @@ const Prestamos = () => {
           {record.estado !== 'pagado' && (
             <Button
               icon={<EditOutlined />}
-              onClick={() => {
-                setEditingPrestamo(record);
-                form.setFieldsValue({
-                  ...record,
-                  fechaInicio: record.fechaInicio
-                    ? dayjs(record.fechaInicio)
-                    : null,
-                  fechaVencimiento: record.fechaVencimiento
-                    ? dayjs(record.fechaVencimiento)
-                    : null,
-                });
-                setModalVisible(true);
-              }}
+              onClick={() => openEditModal(record)}
             >
               Editar
             </Button>
@@ -195,17 +238,18 @@ const Prestamos = () => {
             display: 'flex',
             justifyContent: 'space-between',
             marginBottom: 16,
+            gap: 16,
+            alignItems: 'center',
           }}
         >
-          <Title level={3}>Préstamos</Title>
+          <div>
+            <Title level={3} style={{ marginBottom: 4 }}>Préstamos</Title>
+            <Text type="secondary">Selecciona cliente, cobrador y plazo para registrar el crédito completo.</Text>
+          </div>
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            onClick={() => {
-              setEditingPrestamo(null);
-              form.resetFields();
-              setModalVisible(true);
-            }}
+            onClick={openCreateModal}
           >
             Nuevo Préstamo
           </Button>
@@ -227,30 +271,51 @@ const Prestamos = () => {
           form.resetFields();
         }}
         footer={null}
-        width={600}
+        width={700}
+        destroyOnClose
       >
         <Form form={form} layout="vertical" onFinish={handleGuardar}>
           <Form.Item
             name="clienteId"
             label="Cliente"
-            rules={[{ required: true }]}
+            rules={[{ required: true, message: 'Selecciona un cliente' }]}
           >
             <Select
               showSearch
               optionFilterProp="children"
               placeholder="Seleccionar cliente"
+              onChange={autoAsignarCobrador}
             >
-              {clientes.map((c) => (
-                <Option key={c._id} value={c._id}>
-                  {c.nombre} - {c.cedula}
+              {clientes.map((item) => (
+                <Option key={item._id} value={item._id}>
+                  {item.nombre} - {item.cedula}
                 </Option>
               ))}
             </Select>
           </Form.Item>
+
+          <Form.Item
+            name="cobradorId"
+            label="Cobrador"
+            rules={[{ required: true, message: 'Selecciona un cobrador' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="children"
+              placeholder="Seleccionar cobrador"
+            >
+              {cobradores.map((item) => (
+                <Option key={item._id} value={item._id}>
+                  {item.nombre} - {item.cedula}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
           <Form.Item
             name="capital"
             label="Capital"
-            rules={[{ required: true }]}
+            rules={[{ required: true, message: 'El capital es obligatorio' }]}
           >
             <InputNumber
               style={{ width: '100%' }}
@@ -258,10 +323,11 @@ const Prestamos = () => {
               step={1000}
             />
           </Form.Item>
+
           <Form.Item
             name="interes"
             label="Interés (%)"
-            rules={[{ required: true }]}
+            rules={[{ required: true, message: 'El interés es obligatorio' }]}
           >
             <InputNumber
               style={{ width: '100%' }}
@@ -270,25 +336,33 @@ const Prestamos = () => {
               step={1}
             />
           </Form.Item>
+
           <Form.Item
             name="plazo"
             label="Plazo (días)"
-            rules={[{ required: true }]}
+            rules={[{ required: true, message: 'El plazo es obligatorio' }]}
           >
             <InputNumber style={{ width: '100%' }} min={1} />
           </Form.Item>
+
           <Form.Item
             name="fechaInicio"
             label="Fecha Inicio"
-            rules={[{ required: true }]}
+            rules={[{ required: true, message: 'La fecha de inicio es obligatoria' }]}
           >
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
+
           <Form.Item name="fechaVencimiento" label="Fecha Vencimiento">
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
+
+          <Form.Item name="notas" label="Notas">
+            <Input.TextArea rows={3} />
+          </Form.Item>
+
           <Form.Item>
-            <Button type="primary" htmlType="submit" loading={loading}>
+            <Button type="primary" htmlType="submit" loading={saving}>
               Guardar
             </Button>
           </Form.Item>
