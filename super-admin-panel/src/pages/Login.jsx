@@ -14,9 +14,11 @@ const Login = ({ onLogin }) => {
   const onFinish = async (values) => {
     try {
       setLoading(true);
-      console.log('Intentando login con:', values.email);
+      const email = String(values.email || '').trim();
+      const password = String(values.password || '').trim();
+      console.log('Intentando login con:', email);
 
-      const response = await login(values.email, values.password);
+      const response = await login(email, password);
       console.log('Respuesta login:', response);
 
       if (response.token) {

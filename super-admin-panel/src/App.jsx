@@ -18,6 +18,8 @@ function App() {
   const [userRole, setUserRole] = useState(
     localStorage.getItem('userRole')
   );
+  const isSuperAdminRole =
+    userRole === 'superadmin' || userRole === 'superadministrador';
 
   useEffect(() => {
     const handleStorage = () => {
@@ -39,7 +41,7 @@ function App() {
           <Route 
             path="/superadmin/*" 
             element={
-              isAuthenticated && userRole === 'superadmin' ? 
+              isAuthenticated && isSuperAdminRole ? 
               <SuperAdminLayout /> : 
               <Navigate to="/login" />
             } 
