@@ -66,6 +66,8 @@ function channelLabel(value = '') {
     telegram: 'Telegram',
     web: 'Web',
     whatsapp: 'WhatsApp',
+    instagram: 'Instagram',
+    facebook: 'Facebook',
     messenger: 'Messenger',
     email: 'Email',
   }[normalized] || normalized || 'Canal';
@@ -77,6 +79,8 @@ function channelColor(value = '') {
     telegram: 'blue',
     web: 'green',
     whatsapp: 'geekblue',
+    instagram: 'magenta',
+    facebook: 'volcano',
     messenger: 'purple',
     email: 'gold',
   }[normalized] || 'default';

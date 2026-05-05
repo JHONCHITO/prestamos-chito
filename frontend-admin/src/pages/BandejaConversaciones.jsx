@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Empty, Input, List, Space, Spin, Tag, Typography } from 'antd';
+import { Badge, Button, Card, Divider, Empty, Input, List, Space, Spin, Tag, Typography } from 'antd';
 import {
   ClockCircleOutlined,
   InboxOutlined,
@@ -28,6 +28,8 @@ function channelLabel(value = '') {
     telegram: 'Telegram',
     web: 'Web',
     whatsapp: 'WhatsApp',
+    instagram: 'Instagram',
+    facebook: 'Facebook',
     messenger: 'Messenger',
     email: 'Email',
   }[normalized] || normalized || 'Canal';
@@ -39,6 +41,8 @@ function channelColor(value = '') {
     telegram: 'blue',
     web: 'green',
     whatsapp: 'geekblue',
+    instagram: 'magenta',
+    facebook: 'volcano',
     messenger: 'purple',
     email: 'gold',
   }[normalized] || 'default';

@@ -102,6 +102,31 @@ function safeString(value) {
   return String(value ?? '').trim();
 }
 
+function normalizeChannel(value = '') {
+  const normalized = normalizeText(value).replace(/\s+/g, '');
+
+  const aliases = {
+    wa: 'whatsapp',
+    whatsapp: 'whatsapp',
+    ig: 'instagram',
+    instagram: 'instagram',
+    fb: 'facebook',
+    facebook: 'facebook',
+    messenger: 'messenger',
+    telegram: 'telegram',
+    tg: 'telegram',
+    web: 'web',
+    website: 'web',
+    portal: 'web',
+    email: 'email',
+    correo: 'email',
+    sms: 'sms',
+    text: 'sms',
+  };
+
+  return aliases[normalized] || safeString(value).toLowerCase() || 'web';
+}
+
 function normalizeText(value) {
   return safeString(value)
     .normalize('NFD')
@@ -284,6 +309,73 @@ function inferAudioFileName(fileName = '', mimeType = '') {
 
   const extension = mimeToExtension[normalizedMime] || 'webm';
   return `audio.${extension}`;
+}
+
+function numberToColombianMoneySpeech(value = '') {
+  const digits = safeString(value).replace(/[^\d]/g, '').replace(/^0+/, '') || '0';
+  const number = Number(digits);
+
+  if (!Number.isFinite(number)) {
+    return safeString(value);
+  }
+
+  if (number === 0) {
+    return 'cero';
+  }
+
+  const millions = Math.floor(number / 1000000);
+  const thousands = Math.floor((number % 1000000) / 1000);
+  const units = number % 1000;
+  const parts = [];
+
+  if (millions) {
+    parts.push(millions === 1 ? '1 millón' : `${millions} millones`);
+  }
+
+  if (thousands) {
+    parts.push(thousands === 1 ? '1 mil' : `${thousands} mil`);
+  }
+
+  if (units) {
+    parts.push(String(units));
+  }
+
+  return parts.join(' ');
+}
+
+function normalizeSpeechText(text = '') {
+  const cleanText = safeString(text);
+  if (!cleanText) {
+    return '';
+  }
+
+  const withSeparatedMoney = cleanText.replace(
+    /(\$|COP)?\s*(\d{1,3}(?:[.,\s]\d{3})+)(?:\s*(?:pesos?|COP|cop))?/gi,
+    (match, currencyPrefix, amount) => {
+      const spokenAmount = numberToColombianMoneySpeech(amount);
+      if (!spokenAmount) {
+        return match;
+      }
+
+      const hasMoneyLabel = Boolean(currencyPrefix) || /pesos?|cop/i.test(match);
+      return hasMoneyLabel ? `${spokenAmount} pesos` : spokenAmount;
+    },
+  );
+
+  const withPlainMoney = withSeparatedMoney.replace(
+    /(\$|COP)\s*(\d{4,})|(\d{4,})\s*(?:pesos?|COP|cop)/gi,
+    (match, currencyPrefix, amountWithPrefix, amountWithSuffix) => {
+      const amount = amountWithPrefix || amountWithSuffix || '';
+      const spokenAmount = numberToColombianMoneySpeech(amount);
+      if (!spokenAmount) {
+        return match;
+      }
+
+      return `${spokenAmount} pesos`;
+    },
+  );
+
+  return withPlainMoney.replace(/\s+/g, ' ').trim();
 }
 
 function parseConversationTurn(content = '') {
@@ -678,11 +770,12 @@ async function synthesizeSpeechAudio({
   }
 
   const speech = await openai.audio.speech.create({
-    input: truncateText(cleanText, 3800),
+    input: truncateText(normalizeSpeechText(cleanText), 3800),
     model: safeString(model) || SPEECH_MODEL,
     voice: safeString(voice) || SPEECH_VOICE,
     response_format: 'mp3',
     speed: Math.min(4, Math.max(0.25, Number(speed) || 1)),
+    instructions: 'Habla en español de Colombia de forma clara. Lee los montos completos y no dividas los millones en partes incorrectas.',
   });
 
   const arrayBuffer = await speech.arrayBuffer();
@@ -894,7 +987,7 @@ function memoryQueryBase({ tenantId, role, userId }) {
   return query;
 }
 
-async function searchMemoryItems({ question, tenantId, userId, role, conversationId, limit = 5 }) {
+async function searchMemoryItems({ question, tenantId, userId, role, conversationId, channel = '', limit = 5 }) {
   const query = memoryQueryBase({ tenantId, role, userId });
 
   if (conversationId) {
@@ -920,6 +1013,7 @@ async function searchMemoryItems({ question, tenantId, userId, role, conversatio
   }
 
   const qTokens = extractTokens(question);
+  const normalizedChannel = normalizeChannel(channel);
 
   return candidates
     .map((item) => {
@@ -931,9 +1025,16 @@ async function searchMemoryItems({ question, tenantId, userId, role, conversatio
       const userBoost = userId && String(item.userId || '') === String(userId) ? 0.08 : 0;
       const conversationBoost = conversationId && String(item.conversationId || '') === String(conversationId) ? 0.06 : 0;
       const kindBoost = item.kind === 'memory' ? 0.05 : 0.02;
+      const memoryType = safeString(item.metadata?.memoryType || '').toLowerCase();
+      const memoryTypeBoost = memoryType === 'durable'
+        ? 0.08
+        : memoryType === 'episodic'
+          ? 0.03
+          : 0;
+      const channelBoost = normalizedChannel && normalizeChannel(item.channel || item.source || '') === normalizedChannel ? 0.04 : 0;
       const exactBoost = qTokens.some((token) => normalizeText(item.content || '').includes(token)) ? 0.05 : 0;
 
-      const score = (semantic * 0.6) + (lexical * 0.25) + recencyBoost + userBoost + conversationBoost + kindBoost + exactBoost;
+      const score = (semantic * 0.6) + (lexical * 0.25) + recencyBoost + userBoost + conversationBoost + kindBoost + memoryTypeBoost + channelBoost + exactBoost;
 
       return {
         ...item,
@@ -1495,13 +1596,14 @@ async function buildClientContext({ question, tenantId, role, userId }) {
   };
 }
 
-async function buildMemoryContext({ question, tenantId, userId, role, conversationId }) {
+async function buildMemoryContext({ question, tenantId, userId, role, conversationId, channel = '' }) {
   const memories = await searchMemoryItems({
     question,
     tenantId,
     userId,
     role,
     conversationId,
+    channel,
     limit: 5,
   });
 
@@ -1514,7 +1616,14 @@ async function buildMemoryContext({ question, tenantId, userId, role, conversati
 
   const text = memories
     .map((memory, index) => {
-      const label = memory.kind === 'memory' ? 'Memoria' : 'Conversacion';
+      const memoryType = safeString(memory.metadata?.memoryType || '').toLowerCase();
+      const label = memory.kind === 'conversation'
+        ? 'Conversacion'
+        : memoryType === 'durable'
+          ? 'Memoria duradera'
+          : memoryType === 'episodic'
+            ? 'Memoria episodica'
+            : 'Memoria';
       return `${index + 1}. [${label}] ${memory.title || 'Sin titulo'}\n${truncateText(memory.summary || memory.content, 700)}`;
     })
     .join('\n\n');
@@ -2347,7 +2456,7 @@ async function synthesizeAudioDocument({
   });
 }
 
-async function buildOperationalContext({ question, tenantId, targetTenantId, role, userId, conversationId, manualContext = '' }) {
+async function buildOperationalContext({ question, tenantId, targetTenantId, role, userId, conversationId, channel = '', manualContext = '' }) {
   const resolvedTenantId = await resolveScopeTenantId({
     tenantId,
     targetTenantId,
@@ -2406,6 +2515,7 @@ async function buildOperationalContext({ question, tenantId, targetTenantId, rol
     userId,
     role,
     conversationId,
+    channel,
   });
 
   if (memoryContext.text) {
@@ -2456,6 +2566,7 @@ async function storeConversationMemory({
   sources = [],
   followUpQuestions = [],
 }) {
+  const normalizedChannel = normalizeChannel(channel);
   const turnContent = truncateText(`Pregunta: ${question}\nRespuesta: ${answer}`, 2200);
   const turnEmbedding = await createEmbedding(turnContent).catch(() => null);
   const important = shouldPersistMemory(question, answer, memorySummary);
@@ -2466,9 +2577,9 @@ async function storeConversationMemory({
     userName: safeString(userName),
     role: safeString(role),
     kind: 'conversation',
-    channel: safeString(channel) || 'web',
+    channel: normalizedChannel,
     conversationId: safeString(conversationId),
-    source: safeString(channel) || 'web',
+    source: normalizedChannel,
     title: truncateText(question, 90),
     content: turnContent,
     summary: truncateText(memorySummary || answer, 900),
@@ -2476,6 +2587,7 @@ async function storeConversationMemory({
       sourceCount: sources.length,
       followUpQuestions,
       important,
+      memoryType: 'conversation_turn',
     },
     embedding: turnEmbedding || undefined,
     contentHash: crypto.createHash('sha1').update(turnContent).digest('hex'),
@@ -2484,6 +2596,37 @@ async function storeConversationMemory({
   };
 
   await RagItem.create(conversationDoc);
+
+  const episodeContent = truncateText(
+    `Episodio conversacional:\nPregunta: ${question}\nRespuesta: ${answer}`,
+    1200,
+  );
+
+  const episodeEmbedding = await createEmbedding(episodeContent).catch(() => null);
+
+  await RagItem.create({
+    tenantId: tenantId || null,
+    userId: userId ? String(userId) : null,
+    userName: safeString(userName),
+    role: safeString(role),
+    kind: 'memory',
+    channel: normalizedChannel,
+    conversationId: safeString(conversationId),
+    source: normalizedChannel,
+    title: truncateText(`Episodio: ${question}`, 90),
+    content: episodeContent,
+    summary: truncateText(answer || question, 900),
+    metadata: {
+      memoryType: 'episodic',
+      sourceCount: sources.length,
+      followUpQuestions,
+      conversationId: safeString(conversationId),
+    },
+    embedding: episodeEmbedding || undefined,
+    contentHash: crypto.createHash('sha1').update(episodeContent).digest('hex'),
+    importance: important ? 0.55 : 0.25,
+    isActive: true,
+  });
 
   let memoryStored = false;
 
@@ -2497,16 +2640,18 @@ async function storeConversationMemory({
       userName: safeString(userName),
       role: safeString(role),
       kind: 'memory',
-      channel: safeString(channel) || 'web',
+      channel: normalizedChannel,
       conversationId: safeString(conversationId),
-      source: safeString(channel) || 'web',
-      title: truncateText(question, 90),
+      source: normalizedChannel,
+      title: truncateText(`Memoria: ${question}`, 90),
       content: memoryContent,
       summary: memoryContent,
       metadata: {
+        memoryType: 'durable',
         sourceCount: sources.length,
         followUpQuestions,
         memorySummary: memoryContent,
+        conversationId: safeString(conversationId),
       },
       embedding: memoryEmbedding || undefined,
       contentHash: crypto.createHash('sha1').update(memoryContent).digest('hex'),
@@ -2561,6 +2706,8 @@ async function answerRagQuestion({
     throw new Error('La pregunta es obligatoria');
   }
 
+  const normalizedChannel = normalizeChannel(channel);
+
   const effectiveConversationId = safeString(conversationId) || crypto.randomUUID();
 
   const context = await buildOperationalContext({
@@ -2570,6 +2717,7 @@ async function answerRagQuestion({
     role,
     userId,
     conversationId: effectiveConversationId,
+    channel: normalizedChannel,
     manualContext,
   });
 
@@ -2649,7 +2797,7 @@ async function answerRagQuestion({
     question: cleanQuestion,
     answer,
     conversationId: effectiveConversationId,
-    channel,
+    channel: normalizedChannel,
     memorySummary,
     sources: context.sources,
     followUpQuestions,
@@ -2678,6 +2826,7 @@ module.exports = {
   buildOperationalContext,
   buildGlobalSnapshot,
   buildTenantSnapshot,
+  normalizeChannel,
   getConversationThread,
   listConversationThreads,
   ingestKnowledgeDocument,

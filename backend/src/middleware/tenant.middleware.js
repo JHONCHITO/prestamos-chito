@@ -31,7 +31,9 @@ const tenantMiddleware = async (req, res, next) => {
       '/api/test',
       '/api/pagos/pendientes',
       '/api/pagos/recordatorio',
-      '/api/debug/'
+      '/api/debug/',
+      '/api/rag/inbound',
+      '/api/rag/webhook'
     ];
 
     const esRutaPublica = rutasPublicas.some(ruta =>

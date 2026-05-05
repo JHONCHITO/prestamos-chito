@@ -9,6 +9,7 @@ const {
   listKnowledgeDocuments,
   listConversationThreads,
   restoreKnowledgeDocument,
+  normalizeChannel,
   synthesizeAudioDocument,
   transcribeAudioDocument,
 } = require('../services/rag.service');
@@ -250,6 +251,89 @@ router.post('/chat', async (req, res) => {
     });
   } catch (error) {
     console.error('Error en /api/rag/chat:', error);
+    return res.status(500).json({
+      ok: false,
+      error: error.message || 'Error interno del servidor',
+    });
+  }
+});
+
+router.post('/inbound', async (req, res) => {
+  try {
+    const user = req.user || {};
+    const webhookSecret = req.headers['x-rag-webhook-secret'];
+    const expectedWebhookSecret = process.env.RAG_WEBHOOK_SECRET || '';
+    const isWebhookAuthorized = Boolean(expectedWebhookSecret) && webhookSecret === expectedWebhookSecret;
+
+    if (!user?.id && !user?._id && !isWebhookAuthorized) {
+      return res.status(401).json({
+        ok: false,
+        error: 'No autorizado',
+      });
+    }
+
+    const tenantId = req.tenantId || user.tenantId || null;
+    const isSuperAdmin = user.rol === 'superadmin' || user.rol === 'superadministrador';
+    const targetTenantId = isSuperAdmin
+      ? (req.body?.targetTenantId || req.body?.tenantId || null)
+      : null;
+    const channel = normalizeChannel(req.body?.channel || req.body?.platform || 'web');
+    const message = req.body?.message || req.body?.text || req.body?.question || '';
+    const externalConversationId = req.body?.conversationId || req.body?.threadId || req.body?.chatId || req.body?.sessionId || req.body?.externalConversationId || '';
+    const externalUserId = req.body?.userId || req.body?.externalUserId || req.body?.fromId || null;
+    const userName = req.body?.userName || req.body?.fromName || req.body?.name || user.nombre || user.email || '';
+    const role = req.body?.role || user.rol || 'admin';
+
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({
+        ok: false,
+        error: 'El mensaje es requerido',
+      });
+    }
+
+    const conversationId = String(externalConversationId || `${channel}:${externalUserId || Date.now()}`);
+
+    const result = await answerRagQuestion({
+      question: message,
+      tenantId,
+      targetTenantId,
+      role,
+      userId: externalUserId || user.id || user._id || null,
+      userName,
+      conversationId,
+      channel,
+      manualContext: req.body?.manualContext || req.body?.context || '',
+    });
+
+    const io = req.app?.get?.('io');
+    if (io) {
+      const tenantScope = result.tenantId || tenantId || targetTenantId || null;
+      const payload = {
+        tenantId: tenantScope,
+        conversationId: result.conversationId,
+        channel,
+        userName,
+        question: message,
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (tenantScope) {
+        io.to(`tenant-${String(tenantScope).toLowerCase()}`).emit('rag:conversation-updated', payload);
+      }
+
+      if (user.rol === 'superadmin' || user.rol === 'superadministrador') {
+        io.to('superadmin-room').emit('rag:conversation-updated', payload);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      channel,
+      conversationId: result.conversationId,
+      ...result,
+    });
+  } catch (error) {
+    console.error('Error en /api/rag/inbound:', error);
     return res.status(500).json({
       ok: false,
       error: error.message || 'Error interno del servidor',

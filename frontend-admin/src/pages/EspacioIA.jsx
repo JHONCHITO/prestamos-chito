@@ -53,6 +53,8 @@ function channelLabel(value = '') {
     telegram: 'Telegram',
     web: 'Web',
     whatsapp: 'WhatsApp',
+    instagram: 'Instagram',
+    facebook: 'Facebook',
     messenger: 'Messenger',
     email: 'Email',
   }[normalized] || normalized || 'Canal';
@@ -64,6 +66,8 @@ function channelColor(value = '') {
     telegram: 'blue',
     web: 'green',
     whatsapp: 'geekblue',
+    instagram: 'magenta',
+    facebook: 'volcano',
     messenger: 'purple',
     email: 'gold',
   }[normalized] || 'default';
@@ -117,6 +121,7 @@ export default function EspacioIA() {
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [voiceStatus, setVoiceStatus] = useState('');
+  const [assistantSpeaking, setAssistantSpeaking] = useState(false);
   const [knowledgeFile, setKnowledgeFile] = useState(null);
   const [knowledgeTitle, setKnowledgeTitle] = useState('');
   const [knowledgeText, setKnowledgeText] = useState('');
@@ -257,6 +262,53 @@ export default function EspacioIA() {
       reader.onerror = () => reject(new Error('No se pudo leer el audio'));
       reader.readAsDataURL(blob);
     });
+  }
+
+  function stopAssistantAudio() {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current.currentTime = 0;
+      audioPlayerRef.current = null;
+    }
+
+    setAssistantSpeaking(false);
+  }
+
+  function isSecureVoiceContext() {
+    if (typeof window === 'undefined') {
+      return true;
+    }
+
+    if (window.isSecureContext) {
+      return true;
+    }
+
+    const hostname = window.location?.hostname || '';
+    return ['localhost', '127.0.0.1', '[::1]'].includes(hostname);
+  }
+
+  function getPreferredRecorderMimeType() {
+    if (typeof MediaRecorder === 'undefined') {
+      return '';
+    }
+
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+      'audio/mp4',
+    ];
+
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  function getVoiceFileName(mimeType = '') {
+    const normalized = String(mimeType || '').toLowerCase();
+    if (normalized.includes('mp4')) return 'nota-de-voz.mp4';
+    if (normalized.includes('ogg')) return 'nota-de-voz.ogg';
+    if (normalized.includes('mpeg')) return 'nota-de-voz.mp3';
+    return 'nota-de-voz.webm';
   }
 
   const appendMessage = (role, content, meta = {}) => {
