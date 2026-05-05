@@ -14,7 +14,8 @@ import Prestamos from './pages/Prestamos';
 import Reportes from './pages/Reportes';
 import Configuracion from './pages/Configuracion';
 import Perfil from './pages/Perfil';
-import AsistenteRag from './pages/AsistenteRag';
+import EspacioIA from './pages/EspacioIA';
+import BandejaConversaciones from './pages/BandejaConversaciones';
 
 message.config({
   top: 100,
@@ -94,7 +95,8 @@ function App() {
             <Route path="/cartera" element={<Cartera />} />
             <Route path="/calendario" element={<Calendario />} />
             <Route path="/reportes" element={<Reportes />} />
-            <Route path="/asistente" element={<AsistenteRag />} />
+            <Route path="/asistente" element={<EspacioIA />} />
+            <Route path="/bandeja" element={<BandejaConversaciones />} />
             <Route path="/configuracion" element={<Configuracion />} />
             <Route path="/perfil" element={<Perfil />} />
             <Route path="*" element={<Navigate to="/dashboard" />} />

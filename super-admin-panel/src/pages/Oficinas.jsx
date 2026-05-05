@@ -11,6 +11,10 @@ export default function Oficinas() {
   const [nombre, setNombre] = useState("");
   const [direccion, setDireccion] = useState("");
   const [telefono, setTelefono] = useState("");
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [cobradorEmail, setCobradorEmail] = useState("");
+  const [cobradorPassword, setCobradorPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [cargando, setCargando] = useState(true);
   const [nuevasCredenciales, setNuevasCredenciales] = useState(null);
@@ -48,7 +52,11 @@ export default function Oficinas() {
       const res = await api.post("/superadmin/crear-oficina", {
         nombre: nombre.trim(),
         direccion: direccion.trim(),
-        telefono: telefono.trim()
+        telefono: telefono.trim(),
+        adminEmail: adminEmail.trim(),
+        adminPassword,
+        cobradorEmail: cobradorEmail.trim(),
+        cobradorPassword
       });
 
       console.log('Oficina creada:', res.data);
@@ -62,6 +70,10 @@ export default function Oficinas() {
       setNombre("");
       setDireccion("");
       setTelefono("");
+      setAdminEmail("");
+      setAdminPassword("");
+      setCobradorEmail("");
+      setCobradorPassword("");
       await cargarOficinas();
     } catch (error) {
       console.error("Error creando oficina:", error);
@@ -161,6 +173,9 @@ export default function Oficinas() {
         <h3 style={{ color: "#b8b8d4", marginBottom: "20px" }}>
           Crear Nueva Oficina
         </h3>
+        <p style={{ color: "#90a4ae", marginBottom: "16px", fontSize: "13px" }}>
+          Define manualmente el email y la contraseña del administrador y del cobrador.
+        </p>
         <div style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
           <input
             placeholder="Nombre de la oficina *"
@@ -197,6 +212,72 @@ export default function Oficinas() {
               placeholder="Teléfono"
               value={telefono}
               onChange={e => setTelefono(e.target.value)}
+              style={{
+                flex: 1,
+                padding: "12px 15px",
+                background: "rgba(255,255,255,0.05)",
+                border: "2px solid rgba(108,60,240,0.3)",
+                borderRadius: "10px",
+                color: "white",
+                fontSize: "16px",
+                outline: "none"
+              }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              placeholder="Email del administrador *"
+              value={adminEmail}
+              onChange={e => setAdminEmail(e.target.value)}
+              style={{
+                flex: 1,
+                padding: "12px 15px",
+                background: "rgba(255,255,255,0.05)",
+                border: "2px solid rgba(108,60,240,0.3)",
+                borderRadius: "10px",
+                color: "white",
+                fontSize: "16px",
+                outline: "none"
+              }}
+            />
+            <input
+              type="password"
+              placeholder="Contraseña del administrador *"
+              value={adminPassword}
+              onChange={e => setAdminPassword(e.target.value)}
+              style={{
+                flex: 1,
+                padding: "12px 15px",
+                background: "rgba(255,255,255,0.05)",
+                border: "2px solid rgba(108,60,240,0.3)",
+                borderRadius: "10px",
+                color: "white",
+                fontSize: "16px",
+                outline: "none"
+              }}
+            />
+          </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              placeholder="Email del cobrador *"
+              value={cobradorEmail}
+              onChange={e => setCobradorEmail(e.target.value)}
+              style={{
+                flex: 1,
+                padding: "12px 15px",
+                background: "rgba(255,255,255,0.05)",
+                border: "2px solid rgba(108,60,240,0.3)",
+                borderRadius: "10px",
+                color: "white",
+                fontSize: "16px",
+                outline: "none"
+              }}
+            />
+            <input
+              type="password"
+              placeholder="Contraseña del cobrador *"
+              value={cobradorPassword}
+              onChange={e => setCobradorPassword(e.target.value)}
               style={{
                 flex: 1,
                 padding: "12px 15px",

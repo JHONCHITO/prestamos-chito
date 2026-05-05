@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Input, List, Space, Spin, Tag, Typography } from 'antd';
-import { LinkOutlined, ReloadOutlined, SendOutlined, RobotOutlined } from '@ant-design/icons';
+import { AudioOutlined, AudioMutedOutlined, LinkOutlined, ReloadOutlined, SendOutlined, RobotOutlined } from '@ant-design/icons';
 import { ragAPI } from '../../api/api';
 
 const { Title, Text, Paragraph } = Typography;
@@ -53,6 +53,10 @@ export default function AsistenteRag() {
   const [knowledgeFile, setKnowledgeFile] = useState(null);
   const [knowledgeTitle, setKnowledgeTitle] = useState('');
   const [knowledgeText, setKnowledgeText] = useState('');
+  const [recording, setRecording] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [voiceStatus, setVoiceStatus] = useState('');
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -66,12 +70,29 @@ export default function AsistenteRag() {
   const [status, setStatus] = useState(null);
   const [knowledgeStatus, setKnowledgeStatus] = useState(null);
   const bottomRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const audioPlayerRef = useRef(null);
 
   const userName = localStorage.getItem('userName') || 'Super Admin';
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, sources, followUps]);
+
+  useEffect(() => () => {
+    try {
+      mediaRecorderRef.current?.stop?.();
+    } catch (error) {
+      // ignore
+    }
+    mediaStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     loadDocuments();
@@ -99,6 +120,148 @@ export default function AsistenteRag() {
       reader.onerror = () => reject(new Error('No se pudo leer el archivo'));
       reader.readAsDataURL(file);
     });
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('No se pudo leer el audio'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function playAssistantAudio(text) {
+    if (!autoSpeak) {
+      return;
+    }
+
+    try {
+      setVoiceBusy(true);
+      setVoiceStatus('Generando respuesta en voz...');
+      const payload = await ragAPI.speakText({
+        text,
+        voice: 'nova',
+      });
+
+      const audioUrl = `data:${payload.mimeType || 'audio/mpeg'};base64,${payload.audioBase64 || ''}`;
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+      }
+
+      const audio = new Audio(audioUrl);
+      audioPlayerRef.current = audio;
+      audio.onended = () => {
+        if (audioPlayerRef.current === audio) {
+          audioPlayerRef.current = null;
+        }
+        setVoiceStatus('');
+        setVoiceBusy(false);
+      };
+      audio.onerror = () => {
+        if (audioPlayerRef.current === audio) {
+          audioPlayerRef.current = null;
+        }
+        setVoiceStatus('No se pudo reproducir el audio de la respuesta.');
+        setVoiceBusy(false);
+      };
+
+      await audio.play();
+      setVoiceStatus('Reproduciendo respuesta...');
+    } catch (error) {
+      console.error('Error generando voz superadmin:', error);
+      setVoiceStatus(error.response?.data?.error || 'No se pudo generar la voz de la respuesta.');
+      setVoiceBusy(false);
+    }
+  }
+
+  async function stopVoiceRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+  }
+
+  async function startVoiceRecording() {
+    if (recording) {
+      await stopVoiceRecording();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceStatus('Tu navegador no soporta grabación de audio.');
+      return;
+    }
+
+    try {
+      setVoiceStatus('Solicitando permiso de micrófono...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      recordingChunksRef.current = [];
+
+      const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? { mimeType: 'audio/webm;codecs=opus' }
+        : {};
+
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = async () => {
+        const chunks = recordingChunksRef.current.slice();
+        recordingChunksRef.current = [];
+        mediaStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        setRecording(false);
+
+        if (!chunks.length) {
+          setVoiceStatus('No se capturó audio.');
+          return;
+        }
+
+        try {
+          setVoiceBusy(true);
+          setVoiceStatus('Transcribiendo audio...');
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+          const dataUrl = await blobToDataUrl(blob);
+          const response = await ragAPI.transcribeAudio({
+            audioBase64: dataUrl.split(',')[1] || '',
+            mimeType: blob.type || 'audio/webm',
+            fileName: 'nota-de-voz.webm',
+            language: 'es',
+          });
+
+          const transcript = String(response.text || '').trim();
+          if (!transcript) {
+            setVoiceStatus('No pude detectar un texto claro en el audio.');
+            setVoiceBusy(false);
+            return;
+          }
+
+          setVoiceStatus('Audio transcrito. Enviando consulta...');
+          setQuestion(transcript);
+          await handleSubmit(transcript);
+          if (!autoSpeak) {
+            setVoiceBusy(false);
+          }
+        } catch (error) {
+          console.error('Error transcribiendo audio superadmin:', error);
+          setVoiceStatus(error.response?.data?.error || 'No se pudo transcribir el audio.');
+          setVoiceBusy(false);
+        }
+      };
+
+      recorder.start();
+      setRecording(true);
+      setVoiceStatus('Grabando... presiona de nuevo para detener.');
+    } catch (error) {
+      console.error('Error iniciando grabación superadmin:', error);
+      setVoiceStatus(error.response?.data?.error || 'No se pudo acceder al micrófono.');
+      setRecording(false);
+    }
   }
 
   const appendMessage = (role, content, meta = {}) => {
@@ -170,8 +333,8 @@ export default function AsistenteRag() {
     }
   };
 
-  const handleSubmit = async () => {
-    const cleanQuestion = question.trim();
+  const handleSubmit = async (overrideQuestion = '') => {
+    const cleanQuestion = String(overrideQuestion || question).trim();
     if (!cleanQuestion) {
       setStatus({ type: 'warning', text: 'Escribe una pregunta para consultar.' });
       return;
@@ -181,6 +344,7 @@ export default function AsistenteRag() {
     setStatus(null);
     appendMessage('user', cleanQuestion, { label: userName });
     setQuestion('');
+    setVoiceStatus('');
 
     try {
       const payload = await ragAPI.chat({
@@ -202,6 +366,10 @@ export default function AsistenteRag() {
         type: payload.memoryStored ? 'success' : 'info',
         text: payload.memoryStored ? 'Memoria actualizada.' : 'Consulta procesada sin guardar una preferencia duradera.',
       });
+
+      if (autoSpeak && payload.answer) {
+        playAssistantAudio(payload.answer);
+      }
     } catch (error) {
       console.error('Error consultando RAG superadmin:', error);
       appendMessage('assistant', error.response?.data?.error || 'No se pudo consultar el asistente.', {
@@ -471,7 +639,28 @@ export default function AsistenteRag() {
               <Button onClick={() => setQuestion('')} disabled={loading}>
                 Limpiar
               </Button>
+              <Button onClick={() => setAutoSpeak((value) => !value)} disabled={loading || voiceBusy}>
+                {autoSpeak ? 'Voz activa' : 'Voz apagada'}
+              </Button>
+              <Button
+                type={recording ? 'primary' : 'default'}
+                danger={recording}
+                icon={recording ? <AudioMutedOutlined /> : <AudioOutlined />}
+                onClick={startVoiceRecording}
+                disabled={loading || voiceBusy}
+              >
+                {recording ? 'Detener' : 'Hablar'}
+              </Button>
             </Space>
+
+            {voiceStatus && (
+              <Alert
+                type="info"
+                showIcon
+                message={voiceStatus}
+                style={{ marginTop: 12 }}
+              />
+            )}
           </div>
         </Card>
 

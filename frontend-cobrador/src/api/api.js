@@ -39,6 +39,22 @@ export const ragAPI = {
     const response = await api.get('/rag/health');
     return response.data;
   },
+  transcribeAudio: async (data) => {
+    const response = await api.post('/rag/audio/transcribe', data);
+    return response.data;
+  },
+  speakText: async (data) => {
+    const response = await api.post('/rag/audio/speech', data);
+    return response.data;
+  },
+  conversations: async (params) => {
+    const response = await api.get('/rag/conversations', { params });
+    return response.data;
+  },
+  conversationMessages: async (conversationId, params) => {
+    const response = await api.get(`/rag/conversations/${conversationId}/messages`, { params });
+    return response.data;
+  },
 };
 
 export default api;

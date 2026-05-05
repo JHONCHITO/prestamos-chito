@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const OpenAI = require('openai');
 const { PDFParse } = require('pdf-parse');
 const mammoth = require('mammoth');
+const { createCanvas } = require('@napi-rs/canvas');
 
 const Cliente = require('../models/Cliente');
 const Prestamo = require('../models/Prestamo');
@@ -12,12 +13,17 @@ const RagItem = require('../models/RagItem');
 
 const CHAT_MODEL = process.env.RAG_CHAT_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_MODEL = process.env.RAG_EMBEDDING_MODEL || process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
+const TRANSCRIPTION_MODEL = process.env.RAG_TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe';
+const SPEECH_MODEL = process.env.RAG_TTS_MODEL || 'gpt-4o-mini-tts';
+const SPEECH_VOICE = process.env.RAG_TTS_VOICE || 'nova';
 const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
 const openai = hasOpenAI
   ? new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     })
   : null;
+
+let pdfjsModulePromise = null;
 
 const STOP_WORDS = new Set([
   'a',
@@ -87,6 +93,10 @@ const MAX_CONTEXT_CHARS = 12000;
 const MAX_SECTION_CHARS = 1800;
 const MAX_PDF_SIZE_BYTES = 20 * 1024 * 1024;
 const MAX_UPLOAD_SIZE_BYTES = MAX_PDF_SIZE_BYTES;
+const MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024;
+const PDF_TEXT_THRESHOLD = Math.max(40, Number(process.env.RAG_PDF_TEXT_THRESHOLD || 120));
+const PDF_OCR_PAGE_LIMIT = Math.max(1, Math.min(50, Number(process.env.RAG_PDF_OCR_PAGE_LIMIT || 12)));
+const PDF_OCR_RENDER_SCALE = Math.max(1, Number(process.env.RAG_PDF_OCR_RENDER_SCALE || 1.75));
 
 function safeString(value) {
   return String(value ?? '').trim();
@@ -254,6 +264,67 @@ function getFileExtension(fileName = '') {
   return match ? match[1] : '';
 }
 
+function inferAudioFileName(fileName = '', mimeType = '') {
+  const safeName = safeString(fileName);
+  if (safeName && getFileExtension(safeName)) {
+    return safeName;
+  }
+
+  const normalizedMime = safeString(mimeType).toLowerCase();
+  const mimeToExtension = {
+    'audio/webm': 'webm',
+    'audio/ogg': 'ogg',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/mp4': 'm4a',
+    'audio/mpeg': 'mp3',
+    'audio/aac': 'aac',
+    'audio/flac': 'flac',
+  };
+
+  const extension = mimeToExtension[normalizedMime] || 'webm';
+  return `audio.${extension}`;
+}
+
+function parseConversationTurn(content = '') {
+  const text = safeString(content);
+  if (!text) {
+    return {
+      question: '',
+      answer: '',
+    };
+  }
+
+  const match = text.match(/Pregunta:\s*([\s\S]*?)(?:\nRespuesta:\s*([\s\S]*))?$/i);
+  if (match) {
+    return {
+      question: safeString(match[1]),
+      answer: safeString(match[2]),
+    };
+  }
+
+  const answerMatch = text.match(/Respuesta:\s*([\s\S]*)$/i);
+  if (answerMatch) {
+    return {
+      question: '',
+      answer: safeString(answerMatch[1]),
+    };
+  }
+
+  return {
+    question: text,
+    answer: '',
+  };
+}
+
+function resolveConversationTenantId({ tenantId, targetTenantId, role }) {
+  if (role === 'superadmin' || role === 'superadministrador') {
+    return safeString(targetTenantId).toLowerCase() || null;
+  }
+
+  return safeString(tenantId).toLowerCase() || null;
+}
+
 function isImageMimeType(mimeType = '', fileName = '') {
   const normalized = safeString(mimeType).toLowerCase();
   const ext = getFileExtension(fileName);
@@ -413,6 +484,218 @@ async function extractTextFromImageBuffer({ buffer, mimeType = 'image/png', file
   return safeString(completion.choices?.[0]?.message?.content || '');
 }
 
+async function loadPdfJsModule() {
+  if (!pdfjsModulePromise) {
+    pdfjsModulePromise = import('pdfjs-dist/build/pdf.mjs');
+  }
+
+  return pdfjsModulePromise;
+}
+
+function createPdfCanvasFactory() {
+  return {
+    create(width, height) {
+      const canvas = createCanvas(Math.max(1, Math.ceil(width)), Math.max(1, Math.ceil(height)));
+      return {
+        canvas,
+        context: canvas.getContext('2d'),
+      };
+    },
+    reset(canvasAndContext, width, height) {
+      canvasAndContext.canvas.width = Math.max(1, Math.ceil(width));
+      canvasAndContext.canvas.height = Math.max(1, Math.ceil(height));
+    },
+    destroy(canvasAndContext) {
+      if (canvasAndContext?.canvas) {
+        canvasAndContext.canvas.width = 0;
+        canvasAndContext.canvas.height = 0;
+      }
+      canvasAndContext.canvas = null;
+      canvasAndContext.context = null;
+    },
+  };
+}
+
+function extractPagePlainText(textContent) {
+  if (!textContent?.items?.length) return '';
+
+  return safeString(
+    textContent.items
+      .map((item) => (typeof item?.str === 'string' ? item.str : ''))
+      .join(' '),
+  ).replace(/\s+/g, ' ').trim();
+}
+
+async function renderPdfPageToBuffer(page, scale = PDF_OCR_RENDER_SCALE) {
+  const viewport = page.getViewport({ scale });
+  const factory = createPdfCanvasFactory();
+  const canvasAndContext = factory.create(viewport.width, viewport.height);
+  const { canvas, context } = canvasAndContext;
+
+  try {
+    const renderTask = page.render({
+      canvasContext: context,
+      viewport,
+      canvasFactory: factory,
+    });
+
+    await renderTask.promise;
+
+    return canvas.toBuffer('image/png');
+  } finally {
+    factory.destroy(canvasAndContext);
+  }
+}
+
+async function extractPdfTextWithOcr({ buffer, fileName = '', mimeType = 'application/pdf' }) {
+  const pdfjsLib = await loadPdfJsModule();
+  const loadingTask = pdfjsLib.getDocument({
+    data: new Uint8Array(buffer),
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    disableFontFace: true,
+    stopAtErrors: false,
+    maxImageSize: -1,
+  });
+
+  const pdf = await loadingTask.promise;
+  const extractedSections = [];
+  const textPages = [];
+  const ocrPages = [];
+  const cleanName = safeString(fileName).replace(/\.[^.]+$/, '') || 'documento';
+
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      let pageText = '';
+
+      try {
+        const textContent = await page.getTextContent({ disableNormalization: false });
+        pageText = extractPagePlainText(textContent);
+      } catch (error) {
+        pageText = '';
+      }
+
+      if (pageText.length >= PDF_TEXT_THRESHOLD) {
+        extractedSections.push(`--- Página ${pageNumber} ---\n${pageText}`);
+        textPages.push(pageNumber);
+        continue;
+      }
+
+      if (pageNumber <= PDF_OCR_PAGE_LIMIT) {
+        try {
+          const pageBuffer = await renderPdfPageToBuffer(page);
+          const ocrText = await extractTextFromImageBuffer({
+            buffer: pageBuffer,
+            mimeType: 'image/png',
+            fileName: `${cleanName}-pagina-${pageNumber}.png`,
+          });
+          const cleanOcr = safeString(ocrText);
+          if (cleanOcr) {
+            extractedSections.push(`--- Página ${pageNumber} (OCR) ---\n${cleanOcr}`);
+            ocrPages.push(pageNumber);
+            continue;
+          }
+        } catch (error) {
+          if (pageText) {
+            extractedSections.push(`--- Página ${pageNumber} ---\n${pageText}`);
+            textPages.push(pageNumber);
+          }
+          continue;
+        }
+      }
+
+      if (pageText) {
+        extractedSections.push(`--- Página ${pageNumber} ---\n${pageText}`);
+        textPages.push(pageNumber);
+      }
+    }
+  } finally {
+    if (typeof pdf.destroy === 'function') {
+      await pdf.destroy().catch(() => null);
+    }
+  }
+
+  return {
+    text: extractedSections.join('\n\n').trim(),
+    pageCount: pdf.numPages,
+    textPages,
+    ocrPages,
+    mimeType,
+  };
+}
+
+async function transcribeAudioBuffer({
+  audioBase64 = '',
+  mimeType = '',
+  fileName = '',
+  language = 'es',
+  prompt = '',
+}) {
+  if (!openai) {
+    throw new Error('Para transcribir audio necesitas configurar OPENAI_API_KEY');
+  }
+
+  const buffer = decodeBase64Buffer(audioBase64, MAX_AUDIO_SIZE_BYTES);
+  const audioFile = await OpenAI.toFile(
+    buffer,
+    inferAudioFileName(fileName, mimeType),
+    {
+      type: safeString(mimeType) || 'audio/webm',
+    },
+  );
+
+  const transcription = await openai.audio.transcriptions.create({
+    file: audioFile,
+    model: TRANSCRIPTION_MODEL,
+    language: safeString(language) || 'es',
+    prompt: safeString(prompt) || undefined,
+    response_format: 'json',
+  });
+
+  return {
+    text: safeString(transcription?.text || ''),
+    language: safeString(language) || 'es',
+    model: TRANSCRIPTION_MODEL,
+    fileName: inferAudioFileName(fileName, mimeType),
+    mimeType: safeString(mimeType) || 'audio/webm',
+  };
+}
+
+async function synthesizeSpeechAudio({
+  text = '',
+  voice = SPEECH_VOICE,
+  model = SPEECH_MODEL,
+  speed = 1,
+}) {
+  if (!openai) {
+    throw new Error('Para generar voz necesitas configurar OPENAI_API_KEY');
+  }
+
+  const cleanText = safeString(text);
+  if (!cleanText) {
+    throw new Error('El texto para sintetizar voz es obligatorio');
+  }
+
+  const speech = await openai.audio.speech.create({
+    input: truncateText(cleanText, 3800),
+    model: safeString(model) || SPEECH_MODEL,
+    voice: safeString(voice) || SPEECH_VOICE,
+    response_format: 'mp3',
+    speed: Math.min(4, Math.max(0.25, Number(speed) || 1)),
+  });
+
+  const arrayBuffer = await speech.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  return {
+    audioBase64: buffer.toString('base64'),
+    mimeType: 'audio/mpeg',
+    model: safeString(model) || SPEECH_MODEL,
+    voice: safeString(voice) || SPEECH_VOICE,
+  };
+}
+
 async function extractDocumentText({
   base64Data = '',
   rawText = '',
@@ -439,18 +722,79 @@ async function extractDocumentText({
   if (sourceType === 'pdf') {
     const pdfBuffer = decodePdfBuffer(base64Data);
     const parser = new PDFParse({ data: pdfBuffer });
+    let parsedText = '';
+    let pageCount = null;
+    let pdfInfo = {};
     try {
       const parsed = await parser.getText();
       const infoResult = await parser.getInfo({ parsePageInfo: true }).catch(() => null);
-      return {
-        text: safeString(parsed.text || ''),
-        sourceType: 'pdf',
-        mimeType: safeString(mimeType) || 'application/pdf',
-        pageCount: Number.isFinite(infoResult?.total) ? infoResult.total : null,
-        info: infoResult?.info || {},
-      };
+
+      parsedText = safeString(parsed.text || '');
+      pageCount = Number.isFinite(infoResult?.total) ? infoResult.total : null;
+      pdfInfo = infoResult?.info || {};
     } finally {
       await parser.destroy().catch(() => null);
+    }
+
+    if (parsedText.length >= PDF_TEXT_THRESHOLD) {
+      return {
+        text: parsedText,
+        sourceType: 'pdf',
+        mimeType: safeString(mimeType) || 'application/pdf',
+        pageCount,
+        info: pdfInfo,
+      };
+    }
+
+    try {
+      const ocrResult = await extractPdfTextWithOcr({
+        buffer: pdfBuffer,
+        fileName,
+        mimeType: safeString(mimeType) || 'application/pdf',
+      });
+      const ocrText = safeString(ocrResult.text);
+      const finalText = ocrText.length > parsedText.length ? ocrText : parsedText;
+
+      if (finalText) {
+        return {
+          text: finalText,
+          sourceType: 'pdf',
+          mimeType: safeString(mimeType) || 'application/pdf',
+          pageCount: pageCount || ocrResult.pageCount || null,
+          info: {
+            ...pdfInfo,
+            ocrUsed: Boolean(ocrResult.ocrPages.length),
+            ocrPages: ocrResult.ocrPages,
+            textPages: ocrResult.textPages,
+            ocrPageLimit: PDF_OCR_PAGE_LIMIT,
+          },
+        };
+      }
+    } catch (ocrError) {
+      if (parsedText) {
+        return {
+          text: parsedText,
+          sourceType: 'pdf',
+          mimeType: safeString(mimeType) || 'application/pdf',
+          pageCount,
+          info: {
+            ...pdfInfo,
+            ocrError: ocrError.message || 'No se pudo aplicar OCR al PDF',
+          },
+        };
+      }
+
+      throw new Error(`No se pudo extraer texto del PDF: ${ocrError.message || 'error desconocido'}`);
+    }
+
+    if (parsedText) {
+      return {
+        text: parsedText,
+        sourceType: 'pdf',
+        mimeType: safeString(mimeType) || 'application/pdf',
+        pageCount,
+        info: pdfInfo,
+      };
     }
   }
 
@@ -1235,7 +1579,13 @@ async function buildKnowledgeContext({ question, tenantId, role }) {
   };
 }
 
-async function listKnowledgeDocuments({ tenantId, targetTenantId, role, limit = 25 }) {
+async function listKnowledgeDocuments({
+  tenantId,
+  targetTenantId,
+  role,
+  limit = 25,
+  includeInactive = false,
+}) {
   const resolvedTenantId = resolveKnowledgeTenantId({
     tenantId,
     targetTenantId,
@@ -1243,9 +1593,12 @@ async function listKnowledgeDocuments({ tenantId, targetTenantId, role, limit = 
   });
 
   const query = {
-    isActive: true,
     kind: 'knowledge',
   };
+
+  if (!includeInactive) {
+    query.isActive = true;
+  }
 
   if (resolvedTenantId) {
     query.$or = [
@@ -1289,6 +1642,7 @@ async function listKnowledgeDocuments({ tenantId, targetTenantId, role, limit = 
         updatedAt: createdAt,
         pageCount: item.metadata?.pageCount || null,
         mimeType: item.metadata?.mimeType || null,
+        isActive: item.isActive !== false,
         chunkCount: 1,
         preview,
       });
@@ -1297,6 +1651,7 @@ async function listKnowledgeDocuments({ tenantId, targetTenantId, role, limit = 
 
     existing.chunkCount += 1;
     existing.updatedAt = createdAt || existing.updatedAt;
+    existing.isActive = existing.isActive !== false || item.isActive !== false;
     if (!existing.preview && preview) {
       existing.preview = preview;
     }
@@ -1309,6 +1664,344 @@ async function listKnowledgeDocuments({ tenantId, targetTenantId, role, limit = 
   return {
     tenantId: resolvedTenantId,
     documents: documents.slice(0, limit),
+  };
+}
+
+function buildKnowledgeDocumentScopeQuery({ tenantId, targetTenantId, role, sourceId }) {
+  const resolvedTenantId = resolveKnowledgeTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+  });
+
+  const query = {
+    kind: 'knowledge',
+    sourceId,
+  };
+
+  if (resolvedTenantId) {
+    query.tenantId = resolvedTenantId;
+  } else {
+    query.tenantId = null;
+  }
+
+  return {
+    resolvedTenantId,
+    query,
+  };
+}
+
+async function setKnowledgeDocumentActiveState({
+  tenantId,
+  targetTenantId,
+  role,
+  sourceId,
+  isActive,
+}) {
+  const { resolvedTenantId, query } = buildKnowledgeDocumentScopeQuery({
+    tenantId,
+    targetTenantId,
+    role,
+    sourceId,
+  });
+
+  const result = await RagItem.updateMany(query, {
+    $set: {
+      isActive: Boolean(isActive),
+    },
+  });
+
+  return {
+    tenantId: resolvedTenantId,
+    sourceId,
+    isActive: Boolean(isActive),
+    matchedCount: result.matchedCount || 0,
+    modifiedCount: result.modifiedCount || 0,
+  };
+}
+
+async function archiveKnowledgeDocument({
+  tenantId,
+  targetTenantId,
+  role,
+  sourceId,
+}) {
+  return setKnowledgeDocumentActiveState({
+    tenantId,
+    targetTenantId,
+    role,
+    sourceId,
+    isActive: false,
+  });
+}
+
+async function restoreKnowledgeDocument({
+  tenantId,
+  targetTenantId,
+  role,
+  sourceId,
+}) {
+  return setKnowledgeDocumentActiveState({
+    tenantId,
+    targetTenantId,
+    role,
+    sourceId,
+    isActive: true,
+  });
+}
+
+async function deleteKnowledgeDocument({
+  tenantId,
+  targetTenantId,
+  role,
+  sourceId,
+}) {
+  const { resolvedTenantId, query } = buildKnowledgeDocumentScopeQuery({
+    tenantId,
+    targetTenantId,
+    role,
+    sourceId,
+  });
+
+  const result = await RagItem.deleteMany(query);
+
+  return {
+    tenantId: resolvedTenantId,
+    sourceId,
+    deletedCount: result.deletedCount || 0,
+  };
+}
+
+async function listConversationThreads({
+  tenantId,
+  targetTenantId,
+  role,
+  limit = 25,
+  channel = '',
+  search = '',
+}) {
+  const resolvedTenantId = resolveConversationTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+  });
+
+  const query = {
+    isActive: true,
+    kind: 'conversation',
+  };
+
+  if (resolvedTenantId) {
+    query.tenantId = resolvedTenantId;
+  } else if (!(role === 'superadmin' || role === 'superadministrador')) {
+    query.tenantId = safeString(tenantId).toLowerCase() || null;
+  }
+
+  if (safeString(channel)) {
+    query.channel = safeString(channel);
+  }
+
+  const items = await RagItem.find(query)
+    .sort({ createdAt: -1 })
+    .limit(1500)
+    .lean();
+
+  const normalizedSearch = normalizeText(search);
+  const threads = new Map();
+
+  items.forEach((item) => {
+    if (!item.conversationId) return;
+
+    const parsed = parseConversationTurn(item.content);
+    const question = safeString(parsed.question || item.title || '');
+    const answer = safeString(parsed.answer || item.summary || '');
+    const preview = truncateText(question || answer || item.summary || item.content, 180);
+    const scopeKey = `${String(item.tenantId || 'global').toLowerCase()}:${String(item.conversationId)}`;
+    const existing = threads.get(scopeKey);
+    const updatedAt = item.updatedAt || item.createdAt || null;
+
+    const haystack = normalizeText(
+      [
+        item.userName,
+        item.title,
+        item.summary,
+        question,
+        answer,
+        item.channel,
+        item.role,
+      ].filter(Boolean).join(' '),
+    );
+
+    if (normalizedSearch && !haystack.includes(normalizedSearch)) {
+      return;
+    }
+
+    if (!existing) {
+      threads.set(scopeKey, {
+        conversationId: String(item.conversationId),
+        tenantId: item.tenantId || null,
+        userId: item.userId || null,
+        userName: item.userName || '',
+        role: item.role || '',
+        channel: item.channel || '',
+        title: item.title || question || 'Conversación',
+        preview,
+        lastQuestion: question,
+        lastAnswer: answer,
+        lastSummary: item.summary || '',
+        turnCount: 1,
+        important: Boolean(item.metadata?.important),
+        sourceCount: Number(item.metadata?.sourceCount || 0),
+        followUpQuestions: Array.isArray(item.metadata?.followUpQuestions)
+          ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
+          : [],
+        createdAt: item.createdAt || null,
+        updatedAt,
+      });
+      return;
+    }
+
+    existing.turnCount += 1;
+    if (updatedAt && (!existing.updatedAt || new Date(updatedAt) > new Date(existing.updatedAt))) {
+      existing.updatedAt = updatedAt;
+      existing.preview = preview || existing.preview;
+      existing.lastQuestion = question || existing.lastQuestion;
+      existing.lastAnswer = answer || existing.lastAnswer;
+      existing.lastSummary = item.summary || existing.lastSummary;
+      existing.title = item.title || existing.title;
+      existing.userName = item.userName || existing.userName;
+      existing.userId = item.userId || existing.userId;
+      existing.role = item.role || existing.role;
+      existing.channel = item.channel || existing.channel;
+      existing.important = Boolean(item.metadata?.important) || existing.important;
+      existing.sourceCount = Number(item.metadata?.sourceCount || existing.sourceCount || 0);
+      existing.followUpQuestions = Array.isArray(item.metadata?.followUpQuestions)
+        ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
+        : existing.followUpQuestions;
+    }
+  });
+
+  const conversations = Array.from(threads.values())
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt || 0) - new Date(a.updatedAt || a.createdAt || 0))
+    .slice(0, limit);
+
+  return {
+    tenantId: resolvedTenantId,
+    conversations,
+    total: conversations.length,
+  };
+}
+
+async function getConversationThread({
+  tenantId,
+  targetTenantId,
+  role,
+  conversationId,
+  channel = '',
+}) {
+  const resolvedTenantId = resolveConversationTenantId({
+    tenantId,
+    targetTenantId,
+    role,
+  });
+
+  const cleanConversationId = safeString(conversationId);
+  if (!cleanConversationId) {
+    throw new Error('La conversación es obligatoria');
+  }
+
+  const query = {
+    isActive: true,
+    kind: 'conversation',
+    conversationId: cleanConversationId,
+  };
+
+  if (resolvedTenantId) {
+    query.tenantId = resolvedTenantId;
+  } else if (!(role === 'superadmin' || role === 'superadministrador')) {
+    query.tenantId = safeString(tenantId).toLowerCase() || null;
+  }
+
+  if (safeString(channel)) {
+    query.channel = safeString(channel);
+  }
+
+  const items = await RagItem.find(query)
+    .sort({ createdAt: 1 })
+    .lean();
+
+  const messages = [];
+  let thread = null;
+
+  items.forEach((item, index) => {
+    const parsed = parseConversationTurn(item.content);
+    const question = safeString(parsed.question || item.title || '');
+    const answer = safeString(parsed.answer || item.summary || '');
+
+    if (!thread) {
+      thread = {
+        conversationId: cleanConversationId,
+        tenantId: item.tenantId || null,
+        userId: item.userId || null,
+        userName: item.userName || '',
+        role: item.role || '',
+        channel: item.channel || '',
+        title: item.title || question || 'Conversación',
+        updatedAt: item.updatedAt || item.createdAt || null,
+        createdAt: item.createdAt || null,
+        important: Boolean(item.metadata?.important),
+        sourceCount: Number(item.metadata?.sourceCount || 0),
+        followUpQuestions: Array.isArray(item.metadata?.followUpQuestions)
+          ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
+          : [],
+      };
+    }
+
+    const baseId = String(item._id || `${cleanConversationId}-${index}`);
+    const timestamp = item.createdAt || item.updatedAt || new Date();
+
+    if (question) {
+      messages.push({
+        id: `${baseId}-user`,
+        role: 'user',
+        content: question,
+        createdAt: timestamp,
+        channel: item.channel || 'web',
+        source: item.source || item.channel || 'web',
+        metadata: item.metadata || {},
+      });
+    }
+
+    if (answer) {
+      messages.push({
+        id: `${baseId}-assistant`,
+        role: 'assistant',
+        content: answer,
+        createdAt: timestamp,
+        channel: item.channel || 'web',
+        source: item.source || item.channel || 'web',
+        metadata: item.metadata || {},
+      });
+    }
+
+    if (!question && !answer && safeString(item.content)) {
+      messages.push({
+        id: `${baseId}-content`,
+        role: 'assistant',
+        content: item.content,
+        createdAt: timestamp,
+        channel: item.channel || 'web',
+        source: item.source || item.channel || 'web',
+        metadata: item.metadata || {},
+      });
+    }
+  });
+
+  return {
+    tenantId: resolvedTenantId,
+    conversation: thread,
+    messages,
+    totalMessages: messages.length,
   };
 }
 
@@ -1621,6 +2314,36 @@ async function ingestKnowledgeDocument({
     extraMetadata: {
       extractionInfo: extracted.info || {},
     },
+  });
+}
+
+async function transcribeAudioDocument({
+  audioBase64 = '',
+  fileName = '',
+  mimeType = '',
+  language = 'es',
+  prompt = '',
+}) {
+  return transcribeAudioBuffer({
+    audioBase64,
+    fileName,
+    mimeType,
+    language,
+    prompt,
+  });
+}
+
+async function synthesizeAudioDocument({
+  text = '',
+  voice = SPEECH_VOICE,
+  model = SPEECH_MODEL,
+  speed = 1,
+}) {
+  return synthesizeSpeechAudio({
+    text,
+    voice,
+    model,
+    speed,
   });
 }
 
@@ -1955,11 +2678,18 @@ module.exports = {
   buildOperationalContext,
   buildGlobalSnapshot,
   buildTenantSnapshot,
+  getConversationThread,
+  listConversationThreads,
   ingestKnowledgeDocument,
+  archiveKnowledgeDocument,
+  restoreKnowledgeDocument,
+  deleteKnowledgeDocument,
+  synthesizeAudioDocument,
   searchMemoryItems,
   searchKnowledgeItems,
   listKnowledgeDocuments,
   ingestPdfKnowledge,
+  transcribeAudioDocument,
   resolveScopeTenantId,
   resolveKnowledgeTenantId,
 };

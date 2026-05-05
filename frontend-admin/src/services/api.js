@@ -193,6 +193,13 @@ export const ragAPI = {
   uploadKnowledge: (data) => api.post('/rag/knowledge', data),
   uploadPdf: (data) => api.post('/rag/pdf', data),
   documents: (params) => api.get('/rag/documents', { params }),
+  archiveDocument: (sourceId, data) => api.patch(`/rag/documents/${sourceId}/archive`, data),
+  restoreDocument: (sourceId, data) => api.patch(`/rag/documents/${sourceId}/restore`, data),
+  deleteDocument: (sourceId, data) => api.delete(`/rag/documents/${sourceId}`, { data }),
+  conversations: (params) => api.get('/rag/conversations', { params }),
+  conversationMessages: (conversationId, params) => api.get(`/rag/conversations/${conversationId}/messages`, { params }),
+  transcribeAudio: (data) => api.post('/rag/audio/transcribe', data),
+  speakText: (data) => api.post('/rag/audio/speech', data),
 };
 
 export default api;

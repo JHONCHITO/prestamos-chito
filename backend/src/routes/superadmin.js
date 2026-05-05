@@ -11,10 +11,7 @@ const Prestamo = require("../models/Prestamo");
 const superadminController = require('../controllers/superadmin.controller');
 
 const { 
-  generarPassword, 
   generarTenant,
-  generarEmailAdmin,
-  generarEmailCobrador,
   generarCodigoEmpresa
 } = require("../utils/generarCredenciales");
 
@@ -129,12 +126,27 @@ router.get("/stats", isSuperAdmin, async (req, res) => {
 // Crear oficina - VERSIÓN CORREGIDA (sin doble hasheo)
 router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
   try {
-    const { nombre, direccion, telefono } = req.body;
+    const {
+      nombre,
+      direccion,
+      telefono,
+    } = req.body;
+
+    const adminEmail = String(req.body.adminEmail || req.body.admin?.email || "").trim().toLowerCase();
+    const adminPassword = String(req.body.adminPassword || req.body.admin?.password || "");
+    const cobradorEmail = String(req.body.cobradorEmail || req.body.cobrador?.email || "").trim().toLowerCase();
+    const cobradorPassword = String(req.body.cobradorPassword || req.body.cobrador?.password || "");
 
     console.log("🏗 Creando oficina:", nombre);
 
     if (!nombre) {
       return res.status(400).json({ error: "El nombre es requerido" });
+    }
+
+    if (!adminEmail || !adminPassword.trim() || !cobradorEmail || !cobradorPassword.trim()) {
+      return res.status(400).json({
+        error: "Debes ingresar email y contraseña para el administrador y el cobrador",
+      });
     }
 
     /* =========================
@@ -163,16 +175,6 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
 
     await tenant.save();
     console.log(`✅ Tenant creado: ${tenantId}`);
-
-    // Generar credenciales
-    const adminPassword = generarPassword();
-    const cobradorPassword = generarPassword();
-
-    const adminEmail = generarEmailAdmin(tenantId).toLowerCase();
-    const cobradorEmail = generarEmailCobrador(tenantId).toLowerCase();
-
-    console.log(`📧 Credenciales admin: ${adminEmail} / ${adminPassword}`);
-    console.log(`📧 Credenciales cobrador: ${cobradorEmail} / ${cobradorPassword}`);
 
     // Crear admin (con password SIN hashear - el modelo lo hará)
     const nuevoAdmin = new Admin({

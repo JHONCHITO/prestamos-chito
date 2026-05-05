@@ -34,7 +34,8 @@ import Dashboard from './Dashboard';
 import OficinasManager from './OficinasManager';
 import Reportes from './Reportes';
 import Configuracion from './Configuracion';
-import AsistenteRag from './AsistenteRag';
+import EspacioIA from './EspacioIA';
+import BandejaConversaciones from './BandejaConversaciones';
 import {
   getOficinas,
   cambiarEstadoOficina,
@@ -398,7 +399,9 @@ const SuperAdminLayout = () => {
       case 'reportes':
         return <Reportes />;
       case 'asistente':
-        return <AsistenteRag />;
+        return <EspacioIA />;
+      case 'bandeja':
+        return <BandejaConversaciones />;
       case 'configuracion':
         return <Configuracion />;
       default:
@@ -575,7 +578,12 @@ const SuperAdminLayout = () => {
             {
               key: 'asistente',
               icon: <MessageOutlined />,
-              label: 'Asistente IA',
+              label: 'Espacio IA',
+            },
+            {
+              key: 'bandeja',
+              icon: <MessageOutlined />,
+              label: 'Call Center IA',
             },
             {
               key: 'configuracion',

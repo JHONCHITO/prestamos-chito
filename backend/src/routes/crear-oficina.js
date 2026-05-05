@@ -5,22 +5,34 @@ const Tenant = require("../models/Tenant");
 const Admin = require("../models/Admin");
 const Cobrador = require("../models/Cobrador");
 const { 
-  generarPassword, 
   generarTenant,
-  generarEmailAdmin,
-  generarEmailCobrador,
   generarCodigoEmpresa
 } = require("../utils/generarCredenciales");
 
 // Ruta para crear oficina (debe ser usada por superadmin)
 router.post("/crear-oficina", async (req, res) => {
   try {
-    const { nombre, direccion, telefono } = req.body;
+    const {
+      nombre,
+      direccion,
+      telefono,
+    } = req.body;
+
+    const adminEmail = String(req.body.adminEmail || req.body.admin?.email || "").trim().toLowerCase();
+    const adminPassword = String(req.body.adminPassword || req.body.admin?.password || "");
+    const cobradorEmail = String(req.body.cobradorEmail || req.body.cobrador?.email || "").trim().toLowerCase();
+    const cobradorPassword = String(req.body.cobradorPassword || req.body.cobrador?.password || "");
 
     console.log("🏗 Creando oficina:", nombre);
 
     if (!nombre) {
       return res.status(400).json({ error: "El nombre es requerido" });
+    }
+
+    if (!adminEmail || !adminPassword.trim() || !cobradorEmail || !cobradorPassword.trim()) {
+      return res.status(400).json({
+        error: "Debes ingresar email y contraseña para el administrador y el cobrador",
+      });
     }
 
     // Generar tenantId usando TU función original
@@ -47,14 +59,6 @@ router.post("/crear-oficina", async (req, res) => {
     });
 
     await tenant.save();
-
-    // Generar credenciales usando TU función original
-    const adminPassword = generarPassword();
-    const cobradorPassword = generarPassword();
-
-    // Generar emails
-    const adminEmail = generarEmailAdmin(tenantId).toLowerCase();
-    const cobradorEmail = generarEmailCobrador(tenantId).toLowerCase();
 
     // Crear admin (la contraseña se hashea automáticamente por el modelo)
     const nuevoAdmin = new Admin({

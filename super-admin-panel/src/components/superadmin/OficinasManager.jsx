@@ -248,6 +248,13 @@ const OficinasManager = () => {
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={handleCrearOficina}>
+          <Alert
+            message="Credenciales manuales"
+            description="Aqui defines los accesos del administrador y del cobrador. Ya no se generan automaticamente."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
           <Form.Item
             name="nombre"
             label="Nombre de la Oficina"
@@ -255,6 +262,59 @@ const OficinasManager = () => {
           >
             <Input placeholder="Ej: Oficina Norte" size="large" />
           </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="adminEmail"
+                label="Email del Administrador"
+                rules={[
+                  { required: true, message: 'Por favor ingrese el email del administrador' },
+                  { type: 'email', message: 'Ingresa un correo valido' }
+                ]}
+              >
+                <Input placeholder="admin@oficina.com" size="large" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="adminPassword"
+                label="Contrasena del Administrador"
+                rules={[
+                  { required: true, message: 'Por favor ingrese la contrasena del administrador' },
+                  { min: 6, message: 'Usa al menos 6 caracteres' }
+                ]}
+              >
+                <Input.Password placeholder="Define la contrasena" size="large" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item
+                name="cobradorEmail"
+                label="Email del Cobrador"
+                rules={[
+                  { required: true, message: 'Por favor ingrese el email del cobrador' },
+                  { type: 'email', message: 'Ingresa un correo valido' }
+                ]}
+              >
+                <Input placeholder="cobrador@oficina.com" size="large" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="cobradorPassword"
+                label="Contrasena del Cobrador"
+                rules={[
+                  { required: true, message: 'Por favor ingrese la contrasena del cobrador' },
+                  { min: 6, message: 'Usa al menos 6 caracteres' }
+                ]}
+              >
+                <Input.Password placeholder="Define la contrasena" size="large" />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item name="direccion" label="Dirección">
             <TextArea rows={3} placeholder="Dirección completa" />

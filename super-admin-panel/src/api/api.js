@@ -75,6 +75,34 @@ export const ragAPI = {
     const response = await api.get('/rag/documents', { params });
     return response.data;
   },
+  archiveDocument: async (sourceId, data) => {
+    const response = await api.patch(`/rag/documents/${sourceId}/archive`, data);
+    return response.data;
+  },
+  restoreDocument: async (sourceId, data) => {
+    const response = await api.patch(`/rag/documents/${sourceId}/restore`, data);
+    return response.data;
+  },
+  deleteDocument: async (sourceId, data) => {
+    const response = await api.delete(`/rag/documents/${sourceId}`, { data });
+    return response.data;
+  },
+  conversations: async (params) => {
+    const response = await api.get('/rag/conversations', { params });
+    return response.data;
+  },
+  conversationMessages: async (conversationId, params) => {
+    const response = await api.get(`/rag/conversations/${conversationId}/messages`, { params });
+    return response.data;
+  },
+  transcribeAudio: async (data) => {
+    const response = await api.post('/rag/audio/transcribe', data);
+    return response.data;
+  },
+  speakText: async (data) => {
+    const response = await api.post('/rag/audio/speech', data);
+    return response.data;
+  },
 };
 
 export default api;

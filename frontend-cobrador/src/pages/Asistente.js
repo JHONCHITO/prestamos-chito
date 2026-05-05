@@ -22,6 +22,10 @@ export default function Asistente({ user, onLogout }) {
   const [conversationId, setConversationId] = useState(loadConversationId);
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [voiceStatus, setVoiceStatus] = useState('');
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -32,17 +36,176 @@ export default function Asistente({ user, onLogout }) {
   const [followUps, setFollowUps] = useState([]);
   const [status, setStatus] = useState('');
   const bottomRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const recordingChunksRef = useRef([]);
+  const audioPlayerRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, sources, followUps]);
 
+  useEffect(() => () => {
+    try {
+      mediaRecorderRef.current?.stop?.();
+    } catch (error) {
+      // ignore
+    }
+    mediaStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      audioPlayerRef.current = null;
+    }
+  }, []);
+
   const appendMessage = (role, content) => {
     setMessages((prev) => [...prev, { role, content }]);
   };
 
-  const handleSubmit = async () => {
-    const cleanQuestion = question.trim();
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('No se pudo leer el audio'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function playAssistantAudio(text) {
+    if (!autoSpeak) {
+      return;
+    }
+
+    try {
+      setVoiceBusy(true);
+      setVoiceStatus('Generando respuesta en voz...');
+      const payload = await ragAPI.speakText({
+        text,
+        voice: 'nova',
+      });
+
+      const audioUrl = `data:${payload.mimeType || 'audio/mpeg'};base64,${payload.audioBase64 || ''}`;
+      if (audioPlayerRef.current) {
+        audioPlayerRef.current.pause();
+      }
+
+      const audio = new Audio(audioUrl);
+      audioPlayerRef.current = audio;
+      audio.onended = () => {
+        if (audioPlayerRef.current === audio) {
+          audioPlayerRef.current = null;
+        }
+        setVoiceStatus('');
+        setVoiceBusy(false);
+      };
+      audio.onerror = () => {
+        if (audioPlayerRef.current === audio) {
+          audioPlayerRef.current = null;
+        }
+        setVoiceStatus('No se pudo reproducir el audio de la respuesta.');
+        setVoiceBusy(false);
+      };
+
+      await audio.play();
+      setVoiceStatus('Reproduciendo respuesta...');
+    } catch (error) {
+      console.error('Error generando voz cobrador:', error);
+      setVoiceStatus(error.response?.data?.error || 'No se pudo generar la voz de la respuesta.');
+      setVoiceBusy(false);
+    }
+  }
+
+  async function stopVoiceRecording() {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+    }
+  }
+
+  async function startVoiceRecording() {
+    if (recording) {
+      await stopVoiceRecording();
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setVoiceStatus('Tu navegador no soporta grabación de audio.');
+      return;
+    }
+
+    try {
+      setVoiceStatus('Solicitando permiso de micrófono...');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      recordingChunksRef.current = [];
+
+      const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? { mimeType: 'audio/webm;codecs=opus' }
+        : {};
+
+      const recorder = new MediaRecorder(stream, options);
+      mediaRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = async () => {
+        const chunks = recordingChunksRef.current.slice();
+        recordingChunksRef.current = [];
+        mediaStreamRef.current?.getTracks?.()?.forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        setRecording(false);
+
+        if (!chunks.length) {
+          setVoiceStatus('No se capturó audio.');
+          return;
+        }
+
+        try {
+          setVoiceBusy(true);
+          setVoiceStatus('Transcribiendo audio...');
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+          const dataUrl = await blobToDataUrl(blob);
+          const response = await ragAPI.transcribeAudio({
+            audioBase64: dataUrl.split(',')[1] || '',
+            mimeType: blob.type || 'audio/webm',
+            fileName: 'nota-de-voz.webm',
+            language: 'es',
+          });
+
+          const transcript = String(response.text || '').trim();
+          if (!transcript) {
+            setVoiceStatus('No pude detectar un texto claro en el audio.');
+            setVoiceBusy(false);
+            return;
+          }
+
+          setVoiceStatus('Audio transcrito. Enviando consulta...');
+          setQuestion(transcript);
+          await handleSubmit(transcript);
+          if (!autoSpeak) {
+            setVoiceBusy(false);
+          }
+        } catch (error) {
+          console.error('Error transcribiendo audio cobrador:', error);
+          setVoiceStatus(error.response?.data?.error || 'No se pudo transcribir el audio.');
+          setVoiceBusy(false);
+        }
+      };
+
+      recorder.start();
+      setRecording(true);
+      setVoiceStatus('Grabando... presiona de nuevo para detener.');
+    } catch (error) {
+      console.error('Error iniciando grabación cobrador:', error);
+      setVoiceStatus(error.response?.data?.error || 'No se pudo acceder al micrófono.');
+      setRecording(false);
+    }
+  }
+
+  const handleSubmit = async (overrideQuestion = '') => {
+    const cleanQuestion = String(overrideQuestion || question).trim();
     if (!cleanQuestion) {
       setStatus('Escribe una pregunta para consultar.');
       return;
@@ -52,6 +215,7 @@ export default function Asistente({ user, onLogout }) {
     setStatus('');
     appendMessage('user', cleanQuestion);
     setQuestion('');
+    setVoiceStatus('');
 
     try {
       const response = await ragAPI.chat({
@@ -64,6 +228,10 @@ export default function Asistente({ user, onLogout }) {
       setSources(Array.isArray(response.sources) ? response.sources : []);
       setFollowUps(Array.isArray(response.followUpQuestions) ? response.followUpQuestions : []);
       setStatus(response.memoryStored ? 'Memoria actualizada.' : 'Respuesta generada.');
+
+      if (autoSpeak && response.answer) {
+        playAssistantAudio(response.answer);
+      }
     } catch (error) {
       console.error('Error consultando asistente:', error);
       appendMessage('assistant', error.response?.data?.error || 'No pude consultar el asistente en este momento.');
@@ -219,7 +387,34 @@ export default function Asistente({ user, onLogout }) {
                 <button onClick={() => setQuestion('')} disabled={loading} style={ghostButtonStyle}>
                   Limpiar
                 </button>
+                <button onClick={() => setAutoSpeak((value) => !value)} disabled={loading || voiceBusy} style={ghostButtonStyle}>
+                  {autoSpeak ? 'Voz activa' : 'Voz apagada'}
+                </button>
+                <button
+                  onClick={startVoiceRecording}
+                  disabled={loading || voiceBusy}
+                  style={{
+                    ...primaryButtonStyle,
+                    background: recording ? 'linear-gradient(135deg, #b91c1c, #ef4444)' : 'linear-gradient(135deg, #0f766e, #14b8a6)',
+                  }}
+                >
+                  {recording ? 'Detener' : 'Hablar'}
+                </button>
               </div>
+
+              {voiceStatus && (
+                <div style={{
+                  marginTop: '12px',
+                  borderRadius: '12px',
+                  padding: '10px 12px',
+                  background: 'rgba(14,165,233,0.08)',
+                  border: '1px solid rgba(14,165,233,0.16)',
+                  color: '#0369a1',
+                  fontSize: '14px',
+                }}>
+                  {voiceStatus}
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'grid', gap: '16px' }}>
