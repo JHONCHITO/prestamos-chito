@@ -69,12 +69,18 @@ router.get('/webhook', async (req, res) => {
     const challenge = req.query['hub.challenge'] || req.query.challenge || '';
     const mode = req.query['hub.mode'] || req.query.mode || '';
 
-   if (mode === 'subscribe' && verifyToken === 'prestamoschito123') {
+  const result = await verifyMetaWebhookChallenge({
+  verifyToken,
+  challenge,
+  mode,
+});
+
+if (result) {
   console.log('✅ WEBHOOK VERIFICADO');
-  return res.status(200).send(challenge);
+  return res.status(200).send(result);
 } else {
   console.log('❌ TOKEN INCORRECTO');
-  return res.status(403).send('Forbidden');
+  return res.sendStatus(403);
 }
   } catch (error) {
     console.error('Error verificando webhook Meta:', error);
