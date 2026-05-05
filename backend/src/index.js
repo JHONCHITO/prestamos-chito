@@ -54,6 +54,7 @@ const allowedOrigins = [
   'http://localhost:5174',
   'http://localhost:5000',
   'https://super-admin-panel-amber.vercel.app',
+  'https://prestamos-superadmin.vercel.app',
   'https://prestamos-admin-5vuebxorl-jhon3.vercel.app',
   'https://prestamos-chito.vercel.app',
   'https://frontend-admin-git-main-jhon3.vercel.app',

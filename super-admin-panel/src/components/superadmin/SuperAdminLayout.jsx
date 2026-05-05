@@ -36,6 +36,7 @@ import Reportes from './Reportes';
 import Configuracion from './Configuracion';
 import EspacioIA from './EspacioIA';
 import BandejaConversaciones from './BandejaConversaciones';
+import { SOCKET_URL } from '../../api/baseUrl';
 import {
   getOficinas,
   cambiarEstadoOficina,
@@ -61,8 +62,7 @@ const SuperAdminLayout = () => {
 
   // Socket.io
   useEffect(() => {
-        const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_URL?.replace('/api', '') || 'http://localhost:5000';
-        const newSocket = io(SOCKET_URL, {
+    const newSocket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,

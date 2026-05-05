@@ -1,7 +1,5 @@
 import axios from "axios";
-
-// Usar import.meta.env para Vite
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+import { API_URL } from "./baseUrl";
 
 console.log('🌐 Super Admin API URL:', API_URL);
 
