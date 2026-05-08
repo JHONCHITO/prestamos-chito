@@ -287,7 +287,21 @@ async function persistKnowledgeVisibilityArtifacts({
   const documentWrite = KnowledgeDocument.findOneAndUpdate(
     documentQuery,
     {
-      $set: documentPayload,
+      $set: {
+        title: documentPayload.title,
+        fileName: documentPayload.fileName,
+        originalTitle: documentPayload.originalTitle,
+        sourceType: documentPayload.sourceType,
+        mimeType: documentPayload.mimeType,
+        pageCount: documentPayload.pageCount,
+        chunkCount: documentPayload.chunkCount,
+        preview: documentPayload.preview,
+        uploadedBy: documentPayload.uploadedBy,
+        uploadedById: documentPayload.uploadedById,
+        isActive: documentPayload.isActive,
+        metadata: documentPayload.metadata,
+        lastIndexedAt: documentPayload.lastIndexedAt,
+      },
       $setOnInsert: {
         tenantId: resolvedTenantId || null,
         sourceId,
@@ -313,10 +327,21 @@ async function persistKnowledgeVisibilityArtifacts({
     },
     {
       $set: {
-        ...record,
-        tenantId: record.tenantId ?? resolvedTenantId ?? null,
-        sourceId: record.sourceId || sourceId,
+        title: record.title,
+        content: record.content,
+        summary: record.summary,
         sourceType: safeString(record.sourceType || sourceType) || 'document',
+        fileName: record.fileName,
+        originalTitle: record.originalTitle,
+        mimeType: record.mimeType,
+        pageCount: record.pageCount,
+        embedding: record.embedding,
+        contentHash: record.contentHash,
+        importance: record.importance,
+        uploadedBy: record.uploadedBy,
+        uploadedById: record.uploadedById,
+        metadata: record.metadata,
+        isActive: record.isActive,
       },
       $setOnInsert: {
         tenantId: record.tenantId ?? resolvedTenantId ?? null,
