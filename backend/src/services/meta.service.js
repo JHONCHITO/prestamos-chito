@@ -56,6 +56,25 @@ function normalizeMetaChannel(channel = '') {
   return normalized;
 }
 
+function buildMetaConversationId({
+  channel = 'whatsapp',
+  sourceId = '',
+  recipientId = '',
+  fallback = '',
+}) {
+  const cleanChannel = normalizeMetaChannel(channel) || 'whatsapp';
+  const cleanSourceId = safeString(sourceId);
+  const cleanRecipientId = safeString(recipientId);
+  const cleanFallback = safeString(fallback);
+
+  const stableId = cleanRecipientId || cleanSourceId || cleanFallback;
+  if (!stableId) {
+    return `${cleanChannel}:unknown`;
+  }
+
+  return `${cleanChannel}:${stableId}`;
+}
+
 function buildSeededCampaignTemplate(tenantId, options = {}) {
   const cleanTenantId = normalizeTenantId(tenantId);
   const createdBy = safeString(options.createdBy || 'system');
@@ -919,11 +938,12 @@ function parseMetaWebhookEvents(body = {}) {
                   value?.sender?.id ||
                   '',
               ),
-              conversationId: safeString(
-                message.id ||
-                  message.mid ||
-                  `${channel}:${safeString(message.from || message.sender?.id || value?.contacts?.[0]?.wa_id || entryId || Date.now())}`,
-              ),
+              conversationId: buildMetaConversationId({
+                channel,
+                sourceId: value?.metadata?.phone_number_id || value?.metadata?.page_id || value?.metadata?.ig_user_id || entryId || '',
+                recipientId: message.from || message.sender?.id || value?.contacts?.[0]?.wa_id || value?.sender?.id || '',
+                fallback: message.id || message.mid || entryId || Date.now(),
+              }),
               userName: safeString(
                 value?.contacts?.[0]?.profile?.name ||
                   value?.contacts?.[0]?.name ||
@@ -987,10 +1007,12 @@ function parseMetaWebhookEvents(body = {}) {
           channel: objectChannel || detectChannelFromObject(entry.messaging_product) || 'facebook',
           sourceId: safeString(entryId || message?.recipient?.id || ''),
           recipientId: safeString(message?.sender?.id || ''),
-          conversationId: safeString(
-            message?.mid ||
-              `${objectChannel || 'channel'}:${safeString(message?.sender?.id || entryId || Date.now())}`,
-          ),
+          conversationId: buildMetaConversationId({
+            channel: objectChannel || detectChannelFromObject(entry.messaging_product) || 'facebook',
+            sourceId: entryId || message?.recipient?.id || '',
+            recipientId: message?.sender?.id || '',
+            fallback: message?.mid || entryId || Date.now(),
+          }),
           userName: safeString(message?.sender?.name || message?.profile?.name || ''),
           messageId: safeString(message?.mid || ''),
           text: safeString(
@@ -1540,6 +1562,7 @@ module.exports = {
   previewMetaCampaign,
   createMetaCampaign,
   sendMetaCampaign,
+  sendMetaTextMessage,
   verifyMetaWebhookChallenge,
   handleMetaWebhook,
   normalizeRecipientPhone,

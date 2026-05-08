@@ -1,30 +1,58 @@
-const axios = require("axios");
+const axios = require('axios');
 
-const token = "TU_ACCESS_TOKEN";
-const phoneNumberId = "TU_PHONE_NUMBER_ID";
+const GRAPH_BASE_URL = process.env.META_GRAPH_API_BASE || 'https://graph.facebook.com';
+const GRAPH_API_VERSION = process.env.META_GRAPH_API_VERSION || 'v21.0';
+const DEFAULT_ACCESS_TOKEN = String(process.env.WHATSAPP_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN || '').trim();
+const DEFAULT_PHONE_NUMBER_ID = String(process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.META_PHONE_NUMBER_ID || '').trim();
 
-const enviarMensaje = async (numero, mensaje) => {
-  try {
-    const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
-      {
-        messaging_product: "whatsapp",
-        to: numero,
-        type: "text",
-        text: { body: mensaje }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+function safeString(value = '') {
+  return String(value ?? '').trim();
+}
 
-    console.log("✅ Mensaje enviado:", response.data);
-  } catch (error) {
-    console.error("❌ Error:", error.response?.data || error.message);
+function normalizeRecipientPhone(value = '') {
+  return safeString(value).replace(/[^\d]/g, '');
+}
+
+async function enviarMensaje(numero, mensaje, options = {}) {
+  const phoneNumberId = safeString(options.phoneNumberId || DEFAULT_PHONE_NUMBER_ID);
+  const accessToken = safeString(options.accessToken || DEFAULT_ACCESS_TOKEN);
+  const text = safeString(mensaje);
+  const recipient = normalizeRecipientPhone(numero);
+
+  if (!phoneNumberId) {
+    throw new Error('Falta WHATSAPP_PHONE_NUMBER_ID o META_PHONE_NUMBER_ID');
   }
-};
+
+  if (!accessToken) {
+    throw new Error('Falta WHATSAPP_ACCESS_TOKEN o META_ACCESS_TOKEN');
+  }
+
+  if (!recipient) {
+    throw new Error('Falta el numero destino');
+  }
+
+  if (!text) {
+    throw new Error('Falta el mensaje');
+  }
+
+  const response = await axios.post(
+    `${GRAPH_BASE_URL}/${GRAPH_API_VERSION}/${phoneNumberId}/messages`,
+    {
+      messaging_product: 'whatsapp',
+      to: recipient,
+      type: 'text',
+      text: { body: text },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 30000,
+    },
+  );
+
+  return response.data;
+}
 
 module.exports = { enviarMensaje };

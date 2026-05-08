@@ -1,7 +1,5 @@
-
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { enviarMensaje } = require('../services/whatsappService');
 
 const {
   getIntegrationForTenant,
@@ -13,8 +11,8 @@ const {
   sendMetaCampaign,
   verifyMetaWebhookChallenge,
   handleMetaWebhook,
+  sendMetaTextMessage,
 } = require('../services/meta.service');
-
 
 const router = express.Router();
 
@@ -23,6 +21,7 @@ function normalizeTenantId(value = '') {
   if (!clean || clean === 'system') {
     return '';
   }
+
   return clean;
 }
 
@@ -66,35 +65,26 @@ function resolveScopeTenantId(req) {
   return normalizeTenantId(req.tenantId || req.user?.tenantId || '');
 }
 
-router.get('/webhook', (req, res) => {
-  const verify_token = "chito123";
+router.get('/webhook', async (req, res) => {
+  try {
+    const challenge = await verifyMetaWebhookChallenge({
+      verifyToken: req.query['hub.verify_token'],
+      challenge: req.query['hub.challenge'],
+      mode: req.query['hub.mode'],
+    });
 
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
+    if (!challenge) {
+      return res.sendStatus(403);
+    }
 
-  console.log("MODE:", mode);
-  console.log("TOKEN:", token);
-  console.log("EXPECTED:", verify_token);
-
-  if (mode === 'subscribe' && token === verify_token) {
-    console.log('✅ WEBHOOK VERIFICADO');
     return res.status(200).send(challenge);
-  } else {
-    console.log('❌ TOKEN INCORRECTO');
+  } catch (error) {
+    console.error('Error verificando webhook Meta:', error);
     return res.sendStatus(403);
   }
 });
 
 router.post('/webhook', async (req, res) => {
-  router.get('/test-whatsapp', async (req, res) => {
-  try {
-    await enviarMensaje("573187092130", "Hola Chito 🚀 funcionando");
-    res.send("Mensaje enviado");
-  } catch (error) {
-    res.status(500).send("Error enviando mensaje");
-  }
-});
   const rawBody = req.rawBody || '';
   const signatureHeader = req.headers['x-hub-signature-256'] || '';
   const body = req.body || {};
@@ -112,6 +102,40 @@ router.post('/webhook', async (req, res) => {
       console.error('Error procesando webhook Meta:', error);
     });
   });
+});
+
+router.get('/test-whatsapp', authMetaRequest, async (req, res) => {
+  try {
+    const tenantId = resolveScopeTenantId(req) || normalizeTenantId(req.query?.tenantId || process.env.META_TEST_TENANT_ID || '');
+    const recipientId = String(req.query?.recipientId || process.env.META_TEST_RECIPIENT_ID || '').trim();
+    const message = String(req.query?.message || 'Hola Chito 🚀 funcionando').trim();
+    const channel = String(req.query?.channel || 'whatsapp').trim();
+
+    if (!tenantId) {
+      return res.status(400).json({ ok: false, error: 'Debes seleccionar una oficina' });
+    }
+
+    if (!recipientId) {
+      return res.status(400).json({ ok: false, error: 'Falta recipientId o META_TEST_RECIPIENT_ID' });
+    }
+
+    const integration = await getIntegrationForTenant(tenantId);
+    if (!integration) {
+      return res.status(400).json({ ok: false, error: 'No hay configuracion Meta para esta oficina' });
+    }
+
+    const result = await sendMetaTextMessage({
+      integration,
+      channel,
+      recipientId,
+      text: message,
+    });
+
+    return res.json({ ok: true, result });
+  } catch (error) {
+    console.error('Error enviando mensaje de prueba Meta:', error);
+    return res.status(500).json({ ok: false, error: error.message || 'Error enviando mensaje' });
+  }
 });
 
 router.get('/config', authMetaRequest, async (req, res) => {
@@ -261,6 +285,5 @@ router.post('/campaigns/:campaignId/send', authMetaRequest, async (req, res) => 
     return res.status(400).json({ ok: false, error: error.message || 'No se pudo enviar la campana' });
   }
 });
-
 
 module.exports = router;
