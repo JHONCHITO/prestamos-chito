@@ -1,5 +1,7 @@
+
 const express = require('express');
 const jwt = require('jsonwebtoken');
+const { enviarMensaje } = require('../services/whatsappService');
 
 const {
   getIntegrationForTenant,
@@ -12,6 +14,7 @@ const {
   verifyMetaWebhookChallenge,
   handleMetaWebhook,
 } = require('../services/meta.service');
+
 
 const router = express.Router();
 
@@ -84,6 +87,14 @@ router.get('/webhook', (req, res) => {
 });
 
 router.post('/webhook', async (req, res) => {
+  router.get('/test-whatsapp', async (req, res) => {
+  try {
+    await enviarMensaje("573187092130", "Hola Chito 🚀 funcionando");
+    res.send("Mensaje enviado");
+  } catch (error) {
+    res.status(500).send("Error enviando mensaje");
+  }
+});
   const rawBody = req.rawBody || '';
   const signatureHeader = req.headers['x-hub-signature-256'] || '';
   const body = req.body || {};
@@ -250,5 +261,6 @@ router.post('/campaigns/:campaignId/send', authMetaRequest, async (req, res) => 
     return res.status(400).json({ ok: false, error: error.message || 'No se pudo enviar la campana' });
   }
 });
+
 
 module.exports = router;
