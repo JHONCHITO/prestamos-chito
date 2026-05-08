@@ -142,4 +142,4 @@ const metaCampaignSchema = new mongoose.Schema(
 
 metaCampaignSchema.index({ tenantId: 1, createdAt: -1 });
 
-module.exports = mongoose.models.MetaCampaign || mongoose.model('MetaCampaign', metaCampaignSchema);
+module.exports = mongoose.models.MetaCampaign || mongoose.model('MetaCampaign', metaCampaignSchema, 'metacampaigns');

@@ -9,6 +9,7 @@ const Cobrador = require("../models/Cobrador");
 const Cliente = require("../models/Cliente");
 const Prestamo = require("../models/Prestamo");
 const superadminController = require('../controllers/superadmin.controller');
+const { ensureMetaWorkspaceForTenant } = require('../services/meta.service');
 
 const { 
   generarTenant,
@@ -198,6 +199,21 @@ router.post("/crear-oficina", isSuperAdmin, async (req, res) => {
     });
     await nuevoCobrador.save();
     console.log(`✅ Cobrador creado: ${cobradorEmail}`);
+
+    try {
+      const metaBootstrap = await ensureMetaWorkspaceForTenant(tenantId, {
+        seedCampaign: true,
+        createdBy: adminEmail,
+        name: `${nombre} Meta`,
+      });
+
+      console.log(`✅ Meta inicializada para tenant ${tenantId}`, {
+        integrationCreated: Boolean(metaBootstrap?.integration),
+        campaignSeeded: Boolean(metaBootstrap?.seededCampaign),
+      });
+    } catch (metaError) {
+      console.warn(`⚠️ No se pudo sembrar Meta para tenant ${tenantId}:`, metaError.message);
+    }
 
     // Verificación opcional
     const adminVerificado = await Admin.findById(nuevoAdmin._id).lean();

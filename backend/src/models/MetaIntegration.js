@@ -128,4 +128,4 @@ const metaIntegrationSchema = new mongoose.Schema(
   },
 );
 
-module.exports = mongoose.models.MetaIntegration || mongoose.model('MetaIntegration', metaIntegrationSchema);
+module.exports = mongoose.models.MetaIntegration || mongoose.model('MetaIntegration', metaIntegrationSchema, 'metaintegrations');

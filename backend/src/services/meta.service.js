@@ -56,6 +56,130 @@ function normalizeMetaChannel(channel = '') {
   return normalized;
 }
 
+function buildSeededCampaignTemplate(tenantId, options = {}) {
+  const cleanTenantId = normalizeTenantId(tenantId);
+  const createdBy = safeString(options.createdBy || 'system');
+
+  return {
+    tenantId: cleanTenantId,
+    name: safeString(options.name || 'Plantilla inicial de difusion') || 'Plantilla inicial de difusion',
+    channel: 'whatsapp',
+    sendMode: 'text',
+    status: 'draft',
+    message: safeString(
+      options.message ||
+        'Hola {{nombre}}, este es un mensaje de ejemplo para tu oficina. Edita esta plantilla antes de enviar una campana real.',
+    ),
+    templateName: '',
+    templateLanguage: 'es',
+    audience: {
+      filter: {
+        estado: 'activo',
+      },
+    },
+    recipients: [],
+    totals: {
+      total: 0,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      pending: 0,
+    },
+    createdBy: {
+      userId: null,
+      userName: createdBy,
+    },
+    metadata: {
+      seeded: true,
+      seededAt: new Date().toISOString(),
+      seededBy: createdBy,
+      source: 'meta-workspace-bootstrap',
+      ...(options.metadata || {}),
+    },
+  };
+}
+
+async function ensureMetaWorkspaceForTenant(tenantId, options = {}) {
+  const cleanTenantId = normalizeTenantId(tenantId);
+  if (!cleanTenantId) {
+    return null;
+  }
+
+  let integration = await MetaIntegration.findOne({ tenantId: cleanTenantId }).lean();
+
+  if (!integration) {
+    const seededIntegration = await MetaIntegration.create(
+      sanitizeIntegrationConfig({
+        tenantId: cleanTenantId,
+        name: safeString(options.name || 'Meta Office'),
+        active: true,
+        autoReplyEnabled: true,
+        webhookVerifyToken: safeString(options.webhookVerifyToken || DEFAULT_VERIFY_TOKEN),
+        webhookAppSecret: safeString(options.webhookAppSecret || DEFAULT_APP_SECRET),
+        graphApiVersion: safeString(options.graphApiVersion || GRAPH_API_VERSION),
+        channels: {},
+        metadata: {
+          seeded: true,
+          seededAt: new Date().toISOString(),
+          seededBy: safeString(options.createdBy || 'system'),
+          source: 'meta-workspace-bootstrap',
+          ...(options.metadata || {}),
+        },
+        createdBy: safeString(options.createdBy || 'system'),
+        updatedBy: safeString(options.createdBy || 'system'),
+      }),
+    );
+
+    integration = seededIntegration.toObject();
+  }
+
+  let seededCampaign = null;
+  if (options.seedCampaign !== false) {
+    const campaignCount = await MetaCampaign.countDocuments({ tenantId: cleanTenantId });
+    if (campaignCount === 0) {
+      const campaign = await MetaCampaign.create(
+        buildSeededCampaignTemplate(cleanTenantId, options),
+      );
+      seededCampaign = campaign.toObject();
+    }
+  }
+
+  return {
+    integration,
+    seededCampaign,
+  };
+}
+
+async function bootstrapMetaWorkspaces() {
+  const tenants = await Tenant.find({}, { tenantId: 1, nombre: 1 }).lean();
+  const results = [];
+
+  for (const tenant of tenants) {
+    const tenantId = normalizeTenantId(tenant?.tenantId);
+    if (!tenantId) {
+      continue;
+    }
+
+    try {
+      const result = await ensureMetaWorkspaceForTenant(tenantId, {
+        seedCampaign: true,
+        createdBy: 'system',
+        name: `${safeString(tenant.nombre || tenantId)} Meta`,
+      });
+
+      results.push({
+        tenantId,
+        integrationCreated: Boolean(result?.integration),
+        campaignSeeded: Boolean(result?.seededCampaign),
+      });
+    } catch (error) {
+      console.error(`Error sembrando Meta para tenant ${tenantId}:`, error.message);
+    }
+  }
+
+  return results;
+}
+
 function channelConfig(integration, channel) {
   return integration?.channels?.[channel] || {};
 }
@@ -284,7 +408,12 @@ async function getIntegrationForTenant(tenantId) {
     return integration;
   }
 
-  return {
+  const seeded = await ensureMetaWorkspaceForTenant(cleanTenantId, {
+    seedCampaign: false,
+    createdBy: 'system',
+  });
+
+  return seeded?.integration || {
     tenantId: cleanTenantId,
     name: '',
     active: false,
@@ -1417,4 +1546,6 @@ module.exports = {
   sanitizeIntegrationConfig,
   sanitizeChannelConfig,
   normalizeMetaChannel,
+  ensureMetaWorkspaceForTenant,
+  bootstrapMetaWorkspaces,
 };

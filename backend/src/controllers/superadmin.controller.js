@@ -1,9 +1,21 @@
 const Tenant = require('../models/Tenant');
+const { ensureMetaWorkspaceForTenant } = require('../services/meta.service');
 
 exports.crearTenant = async (req, res) => {
   try {
     const nuevoTenant = new Tenant(req.body);
     await nuevoTenant.save();
+
+    try {
+      await ensureMetaWorkspaceForTenant(nuevoTenant.tenantId, {
+        seedCampaign: true,
+        createdBy: 'system',
+        name: `${nuevoTenant.nombre || nuevoTenant.tenantId} Meta`,
+      });
+    } catch (metaError) {
+      console.warn(`No se pudo sembrar Meta para ${nuevoTenant.tenantId}:`, metaError.message);
+    }
+
     res.status(201).json(nuevoTenant);
   } catch (error) {
     console.error("Error al crear empresa:", error);

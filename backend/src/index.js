@@ -10,6 +10,7 @@ const jwt = require('jsonwebtoken');
 const http = require('http');
 const socketIo = require('socket.io');
 const Pago = require('./models/Pago');
+const { bootstrapMetaWorkspaces } = require('./services/meta.service');
 
 const telegramRoutes = require('./telegram/telegram.routes');
 
@@ -291,6 +292,8 @@ mongoose.connect(process.env.MONGODB_URI)
   .then(async () => {
     console.log('✅ MongoDB conectado');
     await ensurePagoIndexes();
+    const metaBootstrapResults = await bootstrapMetaWorkspaces();
+    console.log(`✅ Meta bootstrap completado para ${metaBootstrapResults.length} oficinas`);
   })
   .catch(err => {
     console.log('❌ Error MongoDB:', err.message);

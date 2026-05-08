@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const Tenant = require("../models/Tenant");
 const Admin = require("../models/Admin");
 const Cobrador = require("../models/Cobrador");
+const { ensureMetaWorkspaceForTenant } = require('../services/meta.service');
 const { 
   generarTenant,
   generarCodigoEmpresa
@@ -80,6 +81,16 @@ router.post("/crear-oficina", async (req, res) => {
       tenantId
     });
     await nuevoCobrador.save();
+
+    try {
+      await ensureMetaWorkspaceForTenant(tenantId, {
+        seedCampaign: true,
+        createdBy: adminEmail,
+        name: `${nombre} Meta`,
+      });
+    } catch (metaError) {
+      console.warn(`⚠️ No se pudo sembrar Meta para ${tenantId}:`, metaError.message);
+    }
 
     console.log("✅ Oficina creada correctamente");
 
