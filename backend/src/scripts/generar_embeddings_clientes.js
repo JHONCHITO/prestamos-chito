@@ -34,6 +34,18 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+function buildClienteEmbeddingText(cliente = {}) {
+  return `
+Nombre: ${cliente.nombre || ''}
+Cedula: ${cliente.cedula || ''}
+Celular: ${cliente.celular || cliente.telefono || ''}
+Direccion: ${cliente.direccion || ''}
+Email: ${cliente.email || ''}
+Tipo: ${cliente.tipoCliente || 'nuevo'}
+Estado: ${cliente.estado || 'activo'}
+`;
+}
+
 // 🔥 conexión Mongo
 async function conectarDB() {
   try {
@@ -59,7 +71,10 @@ async function generarEmbeddingsClientes() {
 
     while (true) {
       const clientes = await Cliente.find({
-        embedding: { $exists: false }
+        $or: [
+          { embedding: { $exists: false } },
+          { embedding: null },
+        ],
       }).limit(BATCH_SIZE);
 
       if (clientes.length === 0) {
@@ -73,19 +88,9 @@ async function generarEmbeddingsClientes() {
         try {
           if (!c.nombre) continue;
 
-          const texto = `
-Nombre: ${c.nombre}
-Tipo: ${c.tipoCliente}
-Estado: ${c.estado}
-Dirección: ${c.direccion}
-Historial: ${c.tipoCliente === "moroso"
-              ? "cliente con retrasos en pagos"
-              : "cliente con comportamiento normal"}
-          `;
-
           const response = await openai.embeddings.create({
             model: "text-embedding-3-small",
-            input: texto.trim(),
+            input: buildClienteEmbeddingText(c).trim(),
           });
 
           c.embedding = response.data[0].embedding;

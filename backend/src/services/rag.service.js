@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const OpenAI = require('openai');
 const { PDFParse } = require('pdf-parse');
 const mammoth = require('mammoth');
@@ -99,9 +100,37 @@ const MAX_AUDIO_SIZE_BYTES = 25 * 1024 * 1024;
 const PDF_TEXT_THRESHOLD = Math.max(40, Number(process.env.RAG_PDF_TEXT_THRESHOLD || 120));
 const PDF_OCR_PAGE_LIMIT = Math.max(1, Math.min(50, Number(process.env.RAG_PDF_OCR_PAGE_LIMIT || 12)));
 const PDF_OCR_RENDER_SCALE = Math.max(1, Number(process.env.RAG_PDF_OCR_RENDER_SCALE || 1.75));
+const CLIENT_VECTOR_INDEX = String(
+  process.env.RAG_CLIENT_VECTOR_INDEX ||
+    process.env.RAG_VECTOR_CLIENT_INDEX ||
+    process.env.ATLAS_VECTOR_CLIENT_INDEX ||
+    'vector_clientes',
+).trim() || 'vector_clientes';
+const MEMORY_VECTOR_INDEX = String(
+  process.env.RAG_MEMORY_VECTOR_INDEX ||
+    process.env.RAG_VECTOR_MEMORY_INDEX ||
+    process.env.ATLAS_VECTOR_MEMORY_INDEX ||
+    'vector_ragitems',
+).trim() || 'vector_ragitems';
+const KNOWLEDGE_VECTOR_INDEX = String(
+  process.env.RAG_KNOWLEDGE_VECTOR_INDEX ||
+    process.env.RAG_VECTOR_KNOWLEDGE_INDEX ||
+    process.env.ATLAS_VECTOR_KNOWLEDGE_INDEX ||
+    'vector_ragitems',
+).trim() || 'vector_ragitems';
+const VECTOR_NUM_CANDIDATES = Math.max(20, Number(process.env.RAG_VECTOR_NUM_CANDIDATES || 100));
 
 function safeString(value) {
   return String(value ?? '').trim();
+}
+
+function toObjectId(value) {
+  const clean = safeString(value);
+  if (!clean || !mongoose.Types.ObjectId.isValid(clean)) {
+    return null;
+  }
+
+  return new mongoose.Types.ObjectId(clean);
 }
 
 function normalizeChannel(value = '') {
@@ -386,6 +415,48 @@ function cosineSimilarity(a = [], b = []) {
 
   if (!normA || !normB) return 0;
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function runAtlasVectorSearch({
+  model,
+  index,
+  queryVector,
+  filter = {},
+  path = 'embedding',
+  limit = 10,
+  numCandidates = VECTOR_NUM_CANDIDATES,
+}) {
+  if (!model || !index || !Array.isArray(queryVector) || !queryVector.length) {
+    return null;
+  }
+
+  try {
+    const pipeline = [
+      {
+        $vectorSearch: {
+          index,
+          path,
+          queryVector,
+          numCandidates,
+          limit,
+          filter,
+        },
+      },
+      {
+        $addFields: {
+          vectorScore: { $meta: 'vectorSearchScore' },
+        },
+      },
+    ];
+
+    return await model.aggregate(pipeline).allowDiskUse(true);
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (/vectorSearch|search index|not found|unknown pipeline stage/i.test(message)) {
+      console.warn(`Atlas vector search no disponible en ${index}: ${message}`);
+    }
+    return null;
+  }
 }
 
 function lexicalScore(question, content) {
@@ -1162,15 +1233,6 @@ async function searchMemoryItems({ question, tenantId, userId, role, conversatio
     query.$or = query.$or ? [...query.$or, { conversationId: String(conversationId) }] : [{ conversationId: String(conversationId) }];
   }
 
-  const candidates = await RagItem.find(query)
-    .sort({ createdAt: -1 })
-    .limit(MAX_MEMORY_CANDIDATES)
-    .lean();
-
-  if (!candidates.length) {
-    return [];
-  }
-
   let queryEmbedding = null;
   if (hasOpenAI) {
     try {
@@ -1182,12 +1244,32 @@ async function searchMemoryItems({ question, tenantId, userId, role, conversatio
 
   const qTokens = extractTokens(question);
   const normalizedChannel = normalizeChannel(channel);
+  let candidates = null;
+
+  if (queryEmbedding) {
+    candidates = await runAtlasVectorSearch({
+      model: RagItem,
+      index: MEMORY_VECTOR_INDEX,
+      queryVector: queryEmbedding,
+      filter: query,
+      limit: Math.max(limit * 4, 20),
+    });
+  }
+
+  if (!Array.isArray(candidates) || !candidates.length) {
+    candidates = await RagItem.find(query)
+      .sort({ createdAt: -1 })
+      .limit(MAX_MEMORY_CANDIDATES)
+      .lean();
+  }
 
   return candidates
     .map((item) => {
       const lexical = lexicalScore(question, `${item.title || ''} ${item.summary || item.content || ''}`);
-      const semantic = queryEmbedding && Array.isArray(item.embedding)
-        ? cosineSimilarity(queryEmbedding, item.embedding)
+      const semantic = queryEmbedding && Number.isFinite(Number(item.vectorScore))
+        ? Number(item.vectorScore) || 0
+        : queryEmbedding && Array.isArray(item.embedding)
+          ? cosineSimilarity(queryEmbedding, item.embedding)
         : 0;
       const recencyBoost = item.createdAt ? Math.max(0, 1 - daysBetween(item.createdAt, new Date()) / 365) * 0.05 : 0;
       const userBoost = userId && String(item.userId || '') === String(userId) ? 0.08 : 0;
@@ -1239,15 +1321,7 @@ function knowledgeQueryBase({ tenantId, role }) {
 
 async function searchKnowledgeItems({ question, tenantId, role, limit = 6 }) {
   const query = knowledgeQueryBase({ tenantId, role });
-
-  const candidates = await RagItem.find(query)
-    .sort({ createdAt: -1 })
-    .limit(MAX_KNOWLEDGE_CANDIDATES)
-    .lean();
-
-  if (!candidates.length) {
-    return [];
-  }
+  let candidates = null;
 
   let queryEmbedding = null;
   if (hasOpenAI) {
@@ -1258,12 +1332,31 @@ async function searchKnowledgeItems({ question, tenantId, role, limit = 6 }) {
     }
   }
 
+  if (queryEmbedding) {
+    candidates = await runAtlasVectorSearch({
+      model: RagItem,
+      index: KNOWLEDGE_VECTOR_INDEX,
+      queryVector: queryEmbedding,
+      filter: query,
+      limit: Math.max(limit * 4, 24),
+    });
+  }
+
+  if (!Array.isArray(candidates) || !candidates.length) {
+    candidates = await RagItem.find(query)
+      .sort({ createdAt: -1 })
+      .limit(MAX_KNOWLEDGE_CANDIDATES)
+      .lean();
+  }
+
   return candidates
     .map((item) => {
       const combined = `${item.title || ''} ${item.summary || item.content || ''} ${item.metadata?.fileName || ''}`;
       const lexical = lexicalScore(question, combined);
-      const semantic = queryEmbedding && Array.isArray(item.embedding)
-        ? cosineSimilarity(queryEmbedding, item.embedding)
+      const semantic = queryEmbedding && Number.isFinite(Number(item.vectorScore))
+        ? Number(item.vectorScore) || 0
+        : queryEmbedding && Array.isArray(item.embedding)
+          ? cosineSimilarity(queryEmbedding, item.embedding)
         : 0;
       const recencyBoost = item.createdAt ? Math.max(0, 1 - daysBetween(item.createdAt, new Date()) / 365) * 0.04 : 0;
       const tenantBoost = tenantId && String(item.tenantId || '') === String(tenantId) ? 0.08 : 0;
@@ -1630,7 +1723,16 @@ async function buildClientContext({ question, tenantId, role, userId }) {
   }
 
   const tokens = extractTokens(question);
-  if (!tokens.length) {
+  let queryEmbedding = null;
+  if (hasOpenAI) {
+    try {
+      queryEmbedding = await createEmbedding(question);
+    } catch (error) {
+      queryEmbedding = null;
+    }
+  }
+
+  if (!tokens.length && !queryEmbedding) {
     return {
       text: '',
       sources: [],
@@ -1640,6 +1742,35 @@ async function buildClientContext({ question, tenantId, role, userId }) {
   const clientFilter = { tenantId };
   if (role === 'cobrador' && userId) {
     clientFilter.cobrador = userId;
+  }
+
+  const vectorClientFilter = { tenantId };
+  if (role === 'cobrador' && userId) {
+    const cobradorObjectId = toObjectId(userId);
+    if (cobradorObjectId) {
+      vectorClientFilter.cobrador = cobradorObjectId;
+    }
+  }
+
+  const clientResults = new Map();
+
+  if (queryEmbedding) {
+    const vectorClients = await runAtlasVectorSearch({
+      model: Cliente,
+      index: CLIENT_VECTOR_INDEX,
+      queryVector: queryEmbedding,
+      filter: vectorClientFilter,
+      limit: 12,
+    });
+
+    if (Array.isArray(vectorClients)) {
+      vectorClients.forEach((client) => {
+        const key = String(client._id || client.cedula || client.nombre || '');
+        if (key) {
+          clientResults.set(key, client);
+        }
+      });
+    }
   }
 
   const orConditions = [];
@@ -1655,20 +1786,25 @@ async function buildClientContext({ question, tenantId, role, userId }) {
     orConditions.push({ telefono: { $regex: escapeRegex(token), $options: 'i' } });
   });
 
-  if (!orConditions.length) {
-    return {
-      text: '',
-      sources: [],
-    };
+  if (orConditions.length) {
+    const textClients = await Cliente.find({
+      ...clientFilter,
+      $or: orConditions,
+    })
+      .populate('cobrador', 'nombre cedula')
+      .sort({ updatedAt: -1 })
+      .limit(8)
+      .lean();
+
+    textClients.forEach((client) => {
+      const key = String(client._id || client.cedula || client.nombre || '');
+      if (key && !clientResults.has(key)) {
+        clientResults.set(key, client);
+      }
+    });
   }
 
-  clientFilter.$or = orConditions;
-
-  const clients = await Cliente.find(clientFilter)
-    .populate('cobrador', 'nombre cedula')
-    .sort({ updatedAt: -1 })
-    .limit(5)
-    .lean();
+  const clients = [...clientResults.values()].slice(0, 5);
 
   if (!clients.length) {
     return {
@@ -3221,6 +3357,7 @@ async function answerRagQuestion({
 }
 
 module.exports = {
+  createEmbedding,
   answerRagQuestion,
   buildOperationalContext,
   buildGlobalSnapshot,

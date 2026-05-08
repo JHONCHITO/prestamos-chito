@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Cliente = require('../models/Cliente');
 const Cobrador = require('../models/Cobrador');
+const { createEmbedding } = require('../services/rag.service');
 const { authMiddleware, adminOnly } = require('../middleware/auth');
 
 router.use((req, res, next) => {
@@ -33,6 +34,19 @@ function normalizeClientePayload(payload = {}) {
   });
 
   return data;
+}
+
+function buildClienteEmbeddingText(payload = {}, cobrador = null) {
+  return [
+    `Nombre: ${payload.nombre || ''}`,
+    `Cedula: ${payload.cedula || ''}`,
+    `Celular: ${payload.celular || payload.telefono || ''}`,
+    `Direccion: ${payload.direccion || ''}`,
+    `Email: ${payload.email || ''}`,
+    `Tipo: ${payload.tipoCliente || 'nuevo'}`,
+    `Estado: ${payload.estado || 'activo'}`,
+    `Cobrador: ${cobrador?.nombre || payload.cobrador || ''}`,
+  ].join('\n');
 }
 
 async function resolveActiveCobrador(tenantId, cobradorId) {
@@ -115,6 +129,8 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Cobrador invalido o inactivo' });
     }
 
+    const embedding = await createEmbedding(buildClienteEmbeddingText(data, cobrador)).catch(() => null);
+
     const existe = await Cliente.findOne({
       cedula: data.cedula,
       tenantId
@@ -127,7 +143,8 @@ router.post('/', authMiddleware, async (req, res) => {
     const cliente = new Cliente({
       ...data,
       tenantId,
-      cobrador: cobrador._id
+      cobrador: cobrador._id,
+      embedding: embedding || undefined,
     });
     await cliente.save();
 
@@ -183,9 +200,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Cobrador invalido o inactivo' });
     }
 
+    const embedding = await createEmbedding(buildClienteEmbeddingText(data, cobrador)).catch(() => null);
+
     clienteActual.set({
       ...data,
       cobrador: cobrador._id,
+      embedding: embedding || clienteActual.embedding || undefined,
     });
     await clienteActual.save();
 
