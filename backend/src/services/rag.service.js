@@ -120,8 +120,99 @@ const KNOWLEDGE_VECTOR_INDEX = String(
 ).trim() || 'vector_ragitems';
 const VECTOR_NUM_CANDIDATES = Math.max(20, Number(process.env.RAG_VECTOR_NUM_CANDIDATES || 100));
 
+function flattenTextValue(value, seen = new WeakSet()) {
+  if (value == null) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().replace(/^\[object Object\]\s*/i, '');
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value).trim();
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? '' : value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => flattenTextValue(entry, seen))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  if (typeof value === 'object') {
+    if (seen.has(value)) {
+      return '';
+    }
+
+    seen.add(value);
+
+    const preferredKeys = [
+      'text',
+      'content',
+      'message',
+      'answer',
+      'respuesta',
+      'summary',
+      'title',
+      'name',
+      'label',
+      'value',
+      'question',
+      'prompt',
+      'body',
+      'preview',
+      'description',
+      'detail',
+      'contentText',
+      'originalText',
+    ];
+
+    for (const key of preferredKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const extracted = flattenTextValue(value[key], seen);
+        if (extracted) {
+          return extracted;
+        }
+      }
+    }
+
+    const parts = [];
+    for (const nestedValue of Object.values(value)) {
+      const extracted = flattenTextValue(nestedValue, seen);
+      if (extracted) {
+        parts.push(extracted);
+      }
+    }
+
+    const joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+    if (joined) {
+      return joined;
+    }
+
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized && serialized !== '{}') {
+        return serialized.trim();
+      }
+    } catch (error) {
+      // Ignore circular or non-serializable payloads.
+    }
+
+    return '';
+  }
+
+  return String(value).trim();
+}
+
 function safeString(value) {
-  return String(value ?? '').trim();
+  return flattenTextValue(value);
 }
 
 function toObjectId(value) {
@@ -2464,14 +2555,14 @@ async function listConversationThreads({
         conversationId: String(item.conversationId),
         tenantId: item.tenantId || null,
         userId: item.userId || null,
-        userName: item.userName || '',
-        role: item.role || '',
-        channel: item.channel || '',
-        title: item.title || question || 'Conversación',
+        userName: safeString(item.userName),
+        role: safeString(item.role),
+        channel: safeString(item.channel),
+        title: safeString(item.title) || question || 'Conversación',
         preview,
         lastQuestion: question,
         lastAnswer: answer,
-        lastSummary: item.summary || '',
+        lastSummary: safeString(item.summary),
         turnCount: 1,
         important: Boolean(item.metadata?.important),
         sourceCount: Number(item.metadata?.sourceCount || 0),
@@ -2490,12 +2581,12 @@ async function listConversationThreads({
       existing.preview = preview || existing.preview;
       existing.lastQuestion = question || existing.lastQuestion;
       existing.lastAnswer = answer || existing.lastAnswer;
-      existing.lastSummary = item.summary || existing.lastSummary;
-      existing.title = item.title || existing.title;
-      existing.userName = item.userName || existing.userName;
+      existing.lastSummary = safeString(item.summary) || existing.lastSummary;
+      existing.title = safeString(item.title) || existing.title;
+      existing.userName = safeString(item.userName) || existing.userName;
       existing.userId = item.userId || existing.userId;
-      existing.role = item.role || existing.role;
-      existing.channel = item.channel || existing.channel;
+      existing.role = safeString(item.role) || existing.role;
+      existing.channel = safeString(item.channel) || existing.channel;
       existing.important = Boolean(item.metadata?.important) || existing.important;
       existing.sourceCount = Number(item.metadata?.sourceCount || existing.sourceCount || 0);
       existing.followUpQuestions = Array.isArray(item.metadata?.followUpQuestions)
@@ -2566,10 +2657,10 @@ async function getConversationThread({
         conversationId: cleanConversationId,
         tenantId: item.tenantId || null,
         userId: item.userId || null,
-        userName: item.userName || '',
-        role: item.role || '',
-        channel: item.channel || '',
-        title: item.title || question || 'Conversación',
+        userName: safeString(item.userName),
+        role: safeString(item.role),
+        channel: safeString(item.channel),
+        title: safeString(item.title) || question || 'Conversación',
         updatedAt: item.updatedAt || item.createdAt || null,
         createdAt: item.createdAt || null,
         important: Boolean(item.metadata?.important),
@@ -2611,7 +2702,7 @@ async function getConversationThread({
       messages.push({
         id: `${baseId}-content`,
         role: 'assistant',
-        content: item.content,
+        content: safeString(item.content),
         createdAt: timestamp,
         channel: item.channel || 'web',
         source: item.source || item.channel || 'web',

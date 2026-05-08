@@ -22,7 +22,7 @@ function formatDate(value) {
 }
 
 function channelLabel(value = '') {
-  const normalized = String(value || '').toLowerCase();
+  const normalized = flattenTextValue(value).toLowerCase();
   return {
     telegram: 'Telegram',
     web: 'Web',
@@ -35,7 +35,7 @@ function channelLabel(value = '') {
 }
 
 function channelColor(value = '') {
-  const normalized = String(value || '').toLowerCase();
+  const normalized = flattenTextValue(value).toLowerCase();
   return {
     telegram: 'blue',
     web: 'green',
@@ -45,6 +45,82 @@ function channelColor(value = '') {
     messenger: 'purple',
     email: 'gold',
   }[normalized] || 'default';
+}
+
+function flattenTextValue(value, seen = new WeakSet()) {
+  if (value == null) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().replace(/^\[object Object\]\s*/i, '');
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value).trim();
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => flattenTextValue(entry, seen))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  if (typeof value === 'object') {
+    if (seen.has(value)) {
+      return '';
+    }
+
+    seen.add(value);
+
+    const preferredKeys = [
+      'text',
+      'content',
+      'message',
+      'answer',
+      'respuesta',
+      'summary',
+      'title',
+      'name',
+      'label',
+      'value',
+      'question',
+      'prompt',
+      'body',
+      'preview',
+      'description',
+      'detail',
+    ];
+
+    for (const key of preferredKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const extracted = flattenTextValue(value[key], seen);
+        if (extracted) {
+          return extracted;
+        }
+      }
+    }
+
+    const parts = [];
+    for (const nestedValue of Object.values(value)) {
+      const extracted = flattenTextValue(nestedValue, seen);
+      if (extracted) {
+        parts.push(extracted);
+      }
+    }
+
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  return String(value).trim();
+}
+
+function toDisplayText(value, fallback = '') {
+  const text = flattenTextValue(value);
+  return text || fallback;
 }
 
 export default function BandejaConversaciones() {
@@ -255,21 +331,22 @@ export default function BandejaConversaciones() {
                       cursor: 'pointer',
                       borderRadius: 14,
                       padding: '12px 14px',
-                      background: active ? 'rgba(79,195,247,0.12)' : 'rgba(255,255,255,0.04)',
-                      border: active ? '1px solid rgba(79,195,247,0.2)' : '1px solid rgba(148,163,184,0.16)',
-                      color: '#fff',
+                      background: active ? 'rgba(219,234,254,0.96)' : '#ffffff',
+                      border: active ? '1px solid rgba(59,130,246,0.22)' : '1px solid #e2e8f0',
+                      color: '#0f172a',
+                      boxShadow: active ? '0 8px 18px rgba(15,23,42,0.04)' : 'none',
                       marginBottom: 10,
                     }}
                   >
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Space align="center" wrap style={{ justifyContent: 'space-between', width: '100%' }}>
-                        <Text strong ellipsis style={{ maxWidth: 190, color: '#fff' }}>
-                          {item.userName || item.title || item.preview || 'Conversacion'}
+                        <Text strong ellipsis style={{ maxWidth: 190, color: '#0f172a' }}>
+                          {toDisplayText(item.userName) || toDisplayText(item.title) || toDisplayText(item.preview) || 'Conversación'}
                         </Text>
                         <Tag color={channelColor(item.channel)}>{channelLabel(item.channel)}</Tag>
                       </Space>
-                      <Text type="secondary" style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)' }}>
-                        {item.preview}
+                      <Text type="secondary" style={{ fontSize: 12, color: '#475569' }}>
+                        {toDisplayText(item.preview) || 'Sin vista previa'}
                       </Text>
                       <Space wrap size={6}>
                         <Tag icon={<MessageOutlined />} color="blue">
@@ -291,7 +368,7 @@ export default function BandejaConversaciones() {
         </Card>
 
         <Card
-          title={selectedConversationSummary?.title || selectedConversation?.title || 'Detalle de la conversacion'}
+          title={toDisplayText(selectedConversationSummary?.title) || toDisplayText(selectedConversation?.title) || 'Detalle de la conversación'}
           extra={
             <Space>
               <Badge status={loadingMessages ? 'processing' : 'success'} />
@@ -299,7 +376,7 @@ export default function BandejaConversaciones() {
             </Space>
           }
           style={{ minHeight: 720 }}
-          bodyStyle={{ color: '#fff' }}
+          bodyStyle={{ color: '#0f172a' }}
         >
           {loadingMessages ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
@@ -320,9 +397,10 @@ export default function BandejaConversaciones() {
                       maxWidth: '92%',
                       borderRadius: 16,
                       padding: '14px 16px',
-                      background: item.role === 'user' ? 'rgba(79,195,247,0.12)' : 'rgba(255,255,255,0.04)',
-                      border: '1px solid rgba(148,163,184,0.16)',
-                      color: '#fff',
+                      background: item.role === 'user' ? 'linear-gradient(135deg, #dbeafe, #eff6ff)' : '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      boxShadow: '0 8px 18px rgba(15,23,42,0.04)',
+                      color: '#0f172a',
                       whiteSpace: 'pre-wrap',
                     }}
                   >
@@ -333,10 +411,10 @@ export default function BandejaConversaciones() {
                         </Tag>
                         <Tag color={channelColor(item.channel)}>{channelLabel(item.channel)}</Tag>
                       </Space>
-                      <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#fff' }}>
-                        {item.content}
+                      <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#0f172a' }}>
+                        {toDisplayText(item.content) || 'Sin contenido'}
                       </Paragraph>
-                      <Text type="secondary" style={{ fontSize: 12, color: 'rgba(255,255,255,0.65)' }}>
+                      <Text type="secondary" style={{ fontSize: 12, color: '#64748b' }}>
                         {formatDate(item.createdAt)}
                       </Text>
                     </Space>
@@ -353,13 +431,13 @@ export default function BandejaConversaciones() {
         <Card title="Resumen">
           {selectedConversation ? (
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Tag color="blue">{selectedConversation.channel || 'web'}</Tag>
-              <Text strong>{selectedConversation.userName || 'Sin nombre'}</Text>
-              <Text type="secondary">{selectedConversation.role || 'Sin rol'}</Text>
+              <Tag color="blue">{toDisplayText(selectedConversation.channel) || 'web'}</Tag>
+              <Text strong>{toDisplayText(selectedConversation.userName) || 'Sin nombre'}</Text>
+              <Text type="secondary">{toDisplayText(selectedConversation.role) || 'Sin rol'}</Text>
               <Divider style={{ margin: '10px 0' }} />
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Text>
-                  <strong>Tenant:</strong> {selectedConversation.tenantId || 'global'}
+                  <strong>Tenant:</strong> {toDisplayText(selectedConversation.tenantId) || 'global'}
                 </Text>
                 <Text>
                   <strong>Turnos:</strong> {selectedConversation.turnCount || 0}
@@ -380,9 +458,9 @@ export default function BandejaConversaciones() {
                   <Divider style={{ margin: '10px 0' }} />
                   <Text strong>Preguntas sugeridas</Text>
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    {selectedConversationFollowUps.map((item) => (
-                      <Tag key={item} color="geekblue" style={{ whiteSpace: 'normal', width: '100%' }}>
-                        {item}
+                    {selectedConversationFollowUps.map((item, index) => (
+                      <Tag key={`${index}-${toDisplayText(item)}`} color="geekblue" style={{ whiteSpace: 'normal', width: '100%' }}>
+                        {toDisplayText(item) || 'Sin sugerencia'}
                       </Tag>
                     ))}
                   </Space>

@@ -23,7 +23,7 @@ function formatDate(value) {
 }
 
 function channelLabel(value = '') {
-  const normalized = String(value || '').toLowerCase();
+  const normalized = flattenTextValue(value).toLowerCase();
   return {
     telegram: 'Telegram',
     web: 'Web',
@@ -36,7 +36,7 @@ function channelLabel(value = '') {
 }
 
 function channelColor(value = '') {
-  const normalized = String(value || '').toLowerCase();
+  const normalized = flattenTextValue(value).toLowerCase();
   return {
     telegram: 'blue',
     web: 'green',
@@ -46,6 +46,82 @@ function channelColor(value = '') {
     messenger: 'purple',
     email: 'gold',
   }[normalized] || 'default';
+}
+
+function flattenTextValue(value, seen = new WeakSet()) {
+  if (value == null) {
+    return '';
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().replace(/^\[object Object\]\s*/i, '');
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value).trim();
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => flattenTextValue(entry, seen))
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  if (typeof value === 'object') {
+    if (seen.has(value)) {
+      return '';
+    }
+
+    seen.add(value);
+
+    const preferredKeys = [
+      'text',
+      'content',
+      'message',
+      'answer',
+      'respuesta',
+      'summary',
+      'title',
+      'name',
+      'label',
+      'value',
+      'question',
+      'prompt',
+      'body',
+      'preview',
+      'description',
+      'detail',
+    ];
+
+    for (const key of preferredKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const extracted = flattenTextValue(value[key], seen);
+        if (extracted) {
+          return extracted;
+        }
+      }
+    }
+
+    const parts = [];
+    for (const nestedValue of Object.values(value)) {
+      const extracted = flattenTextValue(nestedValue, seen);
+      if (extracted) {
+        parts.push(extracted);
+      }
+    }
+
+    return parts.join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  return String(value).trim();
+}
+
+function toDisplayText(value, fallback = '') {
+  const text = flattenTextValue(value);
+  return text || fallback;
 }
 
 export default function BandejaConversaciones() {
@@ -253,12 +329,12 @@ export default function BandejaConversaciones() {
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Space align="center" wrap style={{ justifyContent: 'space-between', width: '100%' }}>
                         <Text strong ellipsis style={{ maxWidth: 190 }}>
-                          {item.userName || item.title || item.preview || 'Conversacion'}
+                          {toDisplayText(item.userName) || toDisplayText(item.title) || toDisplayText(item.preview) || 'Conversación'}
                         </Text>
                         <Tag color={channelColor(item.channel)}>{channelLabel(item.channel)}</Tag>
                       </Space>
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        {item.preview}
+                        {toDisplayText(item.preview) || 'Sin vista previa'}
                       </Text>
                       <Space wrap size={6}>
                         <Tag icon={<MessageOutlined />} color="blue">
@@ -280,7 +356,7 @@ export default function BandejaConversaciones() {
         </Card>
 
         <Card
-          title={selectedConversationSummary?.title || selectedConversation?.title || 'Detalle de la conversacion'}
+          title={toDisplayText(selectedConversationSummary?.title) || toDisplayText(selectedConversation?.title) || 'Detalle de la conversación'}
           extra={
             <Space>
               <Badge status={loadingMessages ? 'processing' : 'success'} />
@@ -322,7 +398,7 @@ export default function BandejaConversaciones() {
                         <Tag color={channelColor(item.channel)}>{channelLabel(item.channel)}</Tag>
                       </Space>
                       <Paragraph style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#0f172a' }}>
-                        {item.content}
+                        {toDisplayText(item.content) || 'Sin contenido'}
                       </Paragraph>
                       <Text type="secondary" style={{ fontSize: 12 }}>
                         {formatDate(item.createdAt)}
@@ -341,13 +417,13 @@ export default function BandejaConversaciones() {
         <Card title="Resumen">
           {selectedConversation ? (
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Tag color="blue">{selectedConversation.channel || 'web'}</Tag>
-              <Text strong>{selectedConversation.userName || 'Sin nombre'}</Text>
-              <Text type="secondary">{selectedConversation.role || 'Sin rol'}</Text>
+              <Tag color="blue">{toDisplayText(selectedConversation.channel) || 'web'}</Tag>
+              <Text strong>{toDisplayText(selectedConversation.userName) || 'Sin nombre'}</Text>
+              <Text type="secondary">{toDisplayText(selectedConversation.role) || 'Sin rol'}</Text>
               <Divider style={{ margin: '10px 0' }} />
               <Space direction="vertical" size={8} style={{ width: '100%' }}>
                 <Text>
-                  <strong>Tenant:</strong> {selectedConversation.tenantId || 'global'}
+                  <strong>Tenant:</strong> {toDisplayText(selectedConversation.tenantId) || 'global'}
                 </Text>
                 <Text>
                   <strong>Turnos:</strong> {selectedConversation.turnCount || 0}
@@ -368,9 +444,9 @@ export default function BandejaConversaciones() {
                   <Divider style={{ margin: '10px 0' }} />
                   <Text strong>Preguntas sugeridas</Text>
                   <Space direction="vertical" style={{ width: '100%' }}>
-                    {selectedConversationFollowUps.map((item) => (
-                      <Tag key={item} color="geekblue" style={{ whiteSpace: 'normal', width: '100%' }}>
-                        {item}
+                    {selectedConversationFollowUps.map((item, index) => (
+                      <Tag key={`${index}-${toDisplayText(item)}`} color="geekblue" style={{ whiteSpace: 'normal', width: '100%' }}>
+                        {toDisplayText(item) || 'Sin sugerencia'}
                       </Tag>
                     ))}
                   </Space>
