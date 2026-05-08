@@ -11,6 +11,7 @@ const http = require('http');
 const socketIo = require('socket.io');
 const Pago = require('./models/Pago');
 const { bootstrapMetaWorkspaces } = require('./services/meta.service');
+const { bootstrapKnowledgeVisibilityArtifacts } = require('./services/rag.service');
 
 const telegramRoutes = require('./telegram/telegram.routes');
 
@@ -294,6 +295,10 @@ mongoose.connect(process.env.MONGODB_URI)
     await ensurePagoIndexes();
     const metaBootstrapResults = await bootstrapMetaWorkspaces();
     console.log(`✅ Meta bootstrap completado para ${metaBootstrapResults.length} oficinas`);
+    const knowledgeBootstrapResults = await bootstrapKnowledgeVisibilityArtifacts();
+    console.log(
+      `✅ Knowledge bootstrap completado: ${knowledgeBootstrapResults.synced}/${knowledgeBootstrapResults.syncAttempts} documentos sincronizados`,
+    );
   })
   .catch(err => {
     console.log('❌ Error MongoDB:', err.message);

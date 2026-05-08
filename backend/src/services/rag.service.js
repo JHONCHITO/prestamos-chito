@@ -341,6 +341,95 @@ async function persistKnowledgeVisibilityArtifacts({
   return documentPayload;
 }
 
+async function syncKnowledgeVisibilityFromRagItems({
+  resolvedTenantId,
+  sourceId,
+}) {
+  const sourceIdSafe = safeString(sourceId);
+  if (!sourceIdSafe) {
+    return null;
+  }
+
+  const ragItems = await RagItem.find({
+    kind: 'knowledge',
+    sourceId: sourceIdSafe,
+    ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+    isActive: true,
+  })
+    .sort({ createdAt: 1, updatedAt: 1 })
+    .lean();
+
+  if (!ragItems.length) {
+    return null;
+  }
+
+  const primary = ragItems[0];
+  const view = buildKnowledgeDocumentView(primary, {
+    sourceId: sourceIdSafe,
+    tenantId: resolvedTenantId || null,
+    title: primary.title || primary.metadata?.fileName || 'Documento',
+    fileName: primary.metadata?.fileName || primary.metadata?.originalTitle || primary.title || 'Documento',
+    originalTitle: primary.metadata?.originalTitle || primary.title || 'Documento',
+    sourceType: primary.metadata?.sourceType || primary.source || 'knowledge',
+    mimeType: primary.metadata?.mimeType || '',
+    pageCount: primary.metadata?.pageCount || null,
+    uploadedBy: primary.userName || '',
+    uploadedById: primary.userId || null,
+    createdAt: primary.createdAt || null,
+    updatedAt: primary.updatedAt || null,
+    chunkCount: ragItems.length,
+    preview: primary.summary || primary.content || '',
+    storage: {
+      documentCollection: 'knowledge_documents',
+      chunkCollection: 'knowledge_chunks',
+      runtimeCollection: 'ragitems',
+    },
+  });
+
+  const chunkRecords = ragItems.map((item, index) => ({
+    tenantId: item.tenantId ?? resolvedTenantId ?? null,
+    sourceId: item.sourceId || sourceIdSafe,
+    chunkIndex: Number(item.metadata?.chunkIndex ?? index),
+    title: item.title || view.title,
+    content: item.content || item.summary || '',
+    summary: item.summary || item.content || '',
+    sourceType: item.metadata?.sourceType || item.source || view.sourceType || 'knowledge',
+    fileName: item.metadata?.fileName || item.metadata?.originalTitle || view.fileName,
+    originalTitle: item.metadata?.originalTitle || view.originalTitle,
+    mimeType: item.metadata?.mimeType || view.mimeType || '',
+    pageCount: item.metadata?.pageCount || view.pageCount || null,
+    embedding: item.embedding || undefined,
+    contentHash: item.contentHash || '',
+    importance: item.importance ?? 0.5,
+    uploadedBy: item.userName || view.uploadedBy || '',
+    uploadedById: item.userId || view.uploadedById || null,
+    metadata: item.metadata || {},
+    isActive: item.isActive !== false,
+  }));
+
+  await persistKnowledgeVisibilityArtifacts({
+    resolvedTenantId,
+    sourceId: sourceIdSafe,
+    sourceType: view.sourceType,
+    mimeType: view.mimeType,
+    fileName: view.fileName,
+    title: view.title,
+    originalTitle: view.originalTitle,
+    extractedText: view.preview || '',
+    pageCount: view.pageCount,
+    userId: view.uploadedById,
+    userName: view.uploadedBy,
+    extraMetadata: {
+      syncedFrom: 'ragitems',
+      sourceCount: ragItems.length,
+      storage: view.storage,
+    },
+    chunkRecords,
+  });
+
+  return view;
+}
+
 function escapeRegex(value) {
   return safeString(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -2554,6 +2643,14 @@ async function ingestPdfKnowledge({
 
   const existing = existingKnowledgeDocument || existingRagItem;
   if (existing) {
+    if (!existingKnowledgeDocument && existingRagItem) {
+      await syncKnowledgeVisibilityFromRagItems({
+        resolvedTenantId,
+        sourceId: fileHash,
+      }).catch((error) => {
+        console.warn('No se pudo sincronizar knowledge_documents desde ragitems (pdf):', error.message || error);
+      });
+    }
     const existingView = buildKnowledgeDocumentView(existing, existingRagItem || existingKnowledgeDocument || {});
     return {
       duplicate: true,
@@ -2762,6 +2859,14 @@ async function storeKnowledgeChunks({
   const existing = existingKnowledgeDocument || existingRagItem;
 
   if (existing) {
+    if (!existingKnowledgeDocument && existingRagItem) {
+      await syncKnowledgeVisibilityFromRagItems({
+        resolvedTenantId,
+        sourceId,
+      }).catch((error) => {
+        console.warn('No se pudo sincronizar knowledge_documents desde ragitems:', error.message || error);
+      });
+    }
     const existingView = buildKnowledgeDocumentView(existing, existingRagItem || existingKnowledgeDocument || {});
     return {
       duplicate: true,
@@ -3225,6 +3330,48 @@ function buildFallbackAnswer({ question, contextText, sources }) {
   return lines.join('\n');
 }
 
+async function bootstrapKnowledgeVisibilityArtifacts() {
+  const knowledgeItems = await RagItem.find({
+    kind: 'knowledge',
+    isActive: true,
+  })
+    .select('tenantId sourceId')
+    .lean();
+
+  const seen = new Set();
+  const syncTasks = [];
+
+  for (const item of knowledgeItems) {
+    const sourceId = safeString(item.sourceId);
+    if (!sourceId) {
+      continue;
+    }
+
+    const tenantKey = String(item.tenantId || 'global').toLowerCase();
+    const mapKey = `${tenantKey}:${sourceId.toLowerCase()}`;
+    if (seen.has(mapKey)) {
+      continue;
+    }
+
+    seen.add(mapKey);
+    syncTasks.push(
+      syncKnowledgeVisibilityFromRagItems({
+        resolvedTenantId: item.tenantId || null,
+        sourceId,
+      }),
+    );
+  }
+
+  const results = await Promise.allSettled(syncTasks);
+  return {
+    scanned: knowledgeItems.length,
+    syncAttempts: syncTasks.length,
+    synced: results.filter((result) => result.status === 'fulfilled' && result.value).length,
+    skipped: results.filter((result) => result.status === 'fulfilled' && !result.value).length,
+    failed: results.filter((result) => result.status === 'rejected').length,
+  };
+}
+
 async function answerRagQuestion({
   question,
   tenantId,
@@ -3373,6 +3520,7 @@ module.exports = {
   searchMemoryItems,
   searchKnowledgeItems,
   listKnowledgeDocuments,
+  bootstrapKnowledgeVisibilityArtifacts,
   ingestPdfKnowledge,
   transcribeAudioDocument,
   resolveScopeTenantId,
