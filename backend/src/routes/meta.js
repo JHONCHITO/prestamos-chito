@@ -63,18 +63,16 @@ function resolveScopeTenantId(req) {
   return normalizeTenantId(req.tenantId || req.user?.tenantId || '');
 }
 
-router.get('/webhook', async (req, res) => {
-  try {
-    const verifyToken = req.query['hub.verify_token'] || req.query.verify_token || '';
-    const challenge = req.query['hub.challenge'] || req.query.challenge || '';
-    const mode = req.query['hub.mode'] || req.query.mode || '';
-
-  router.get('/webhook', (req, res) => {
+router.get('/webhook', (req, res) => {
   const verify_token = "chito123";
 
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+
+  console.log("MODE:", mode);
+  console.log("TOKEN:", token);
+  console.log("EXPECTED:", verify_token);
 
   if (mode === 'subscribe' && token === verify_token) {
     console.log('✅ WEBHOOK VERIFICADO');
@@ -82,19 +80,6 @@ router.get('/webhook', async (req, res) => {
   } else {
     console.log('❌ TOKEN INCORRECTO');
     return res.sendStatus(403);
-  }
-});
-
-if (result) {
-  console.log('✅ WEBHOOK VERIFICADO');
-  return res.status(200).send(result);
-} else {
-  console.log('❌ TOKEN INCORRECTO');
-  return res.sendStatus(403);
-}
-  } catch (error) {
-    console.error('Error verificando webhook Meta:', error);
-    return res.status(500).send('Error');
   }
 });
 
