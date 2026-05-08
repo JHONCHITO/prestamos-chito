@@ -34,6 +34,23 @@ const { TextArea } = Input;
 
 const unwrap = (response) => response?.data ?? response;
 
+function dedupeCampaigns(list = []) {
+  const seen = new Set();
+
+  return list.filter((item) => {
+    const key = item?._id
+      ? String(item._id)
+      : `${String(item?.name || '')}:${String(item?.channel || '')}:${String(item?.createdAt || '')}`;
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
 const channelLabel = {
   whatsapp: 'WhatsApp',
   instagram: 'Instagram',
@@ -147,7 +164,7 @@ export default function CanalesMeta() {
       setIntegration(config);
       configForm.setFieldsValue({ ...defaultConfig, ...config });
 
-      setCampaigns(Array.isArray(campaignData?.campaigns) ? campaignData.campaigns : []);
+      setCampaigns(dedupeCampaigns(Array.isArray(campaignData?.campaigns) ? campaignData.campaigns : []));
       campaignForm.setFieldsValue(defaultCampaign);
     } catch (error) {
       message.error(error.response?.data?.error || error.message || 'No se pudo cargar Meta');
@@ -207,7 +224,7 @@ export default function CanalesMeta() {
       const data = unwrap(response);
       const campaign = data?.campaign || data;
       message.success(autoSend ? 'Campana creada y enviada' : 'Borrador guardado');
-      setCampaigns((prev) => [campaign, ...prev].slice(0, 25));
+      setCampaigns((prev) => dedupeCampaigns([campaign, ...prev]).slice(0, 25));
       setPreviewData(null);
       campaignForm.resetFields();
       campaignForm.setFieldsValue(defaultCampaign);
@@ -228,7 +245,7 @@ export default function CanalesMeta() {
       const response = await metaAPI.sendCampaign(record._id);
       const data = unwrap(response);
       const updated = data?.campaign || data;
-      setCampaigns((prev) => prev.map((item) => (item._id === updated._id ? updated : item)));
+      setCampaigns((prev) => dedupeCampaigns(prev.map((item) => (item._id === updated._id ? updated : item))));
       message.success('Campana enviada');
     } catch (error) {
       message.error(error.response?.data?.error || error.message || 'No se pudo enviar la campana');

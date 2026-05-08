@@ -10,6 +10,8 @@ const Pago = require('../models/Pago');
 const Tenant = require('../models/Tenant');
 const Sede = require('../models/Sede');
 const RagItem = require('../models/RagItem');
+const KnowledgeDocument = require('../models/KnowledgeDocument');
+const KnowledgeChunk = require('../models/KnowledgeChunk');
 
 const CHAT_MODEL = process.env.RAG_CHAT_MODEL || process.env.OPENAI_CHAT_MODEL || 'gpt-4.1-mini';
 const EMBEDDING_MODEL = process.env.RAG_EMBEDDING_MODEL || process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
@@ -142,6 +144,172 @@ function truncateText(value, limit = MAX_SECTION_CHARS) {
   if (!text) return '';
   if (text.length <= limit) return text;
   return `${text.slice(0, Math.max(0, limit - 3)).trimEnd()}...`;
+}
+
+function buildKnowledgeTenantFilter(resolvedTenantId = null) {
+  if (resolvedTenantId) {
+    return {
+      $or: [
+        { tenantId: resolvedTenantId },
+        { tenantId: null },
+      ],
+    };
+  }
+
+  return { tenantId: null };
+}
+
+function buildKnowledgeViewKey(item = {}) {
+  return `${String(item.tenantId || 'global').toLowerCase()}:${String(item.sourceId || item.contentHash || item._id || '').toLowerCase()}`;
+}
+
+function buildKnowledgeDocumentView(item = {}, fallback = {}) {
+  const sourceType = safeString(item.sourceType || item.metadata?.sourceType || item.source || fallback.sourceType || 'knowledge');
+  const fileName = safeString(item.fileName || item.metadata?.fileName || fallback.fileName || item.metadata?.originalTitle || item.originalTitle || item.title || fallback.title || 'Documento');
+  const originalTitle = safeString(item.originalTitle || item.metadata?.originalTitle || fallback.originalTitle || fileName || 'Documento');
+  const title = safeString(item.title || fallback.title || fileName || originalTitle || 'Documento');
+  const createdAt = item.createdAt || fallback.createdAt || null;
+  const updatedAt = item.updatedAt || fallback.updatedAt || createdAt || null;
+
+  return {
+    sourceId: safeString(item.sourceId || fallback.sourceId || item.contentHash || item._id || ''),
+    tenantId: item.tenantId ?? fallback.tenantId ?? null,
+    title,
+    fileName,
+    originalTitle,
+    sourceType,
+    mimeType: safeString(item.mimeType || item.metadata?.mimeType || fallback.mimeType || '') || '',
+    pageCount: item.pageCount ?? item.metadata?.pageCount ?? fallback.pageCount ?? null,
+    uploadedBy: safeString(item.uploadedBy || item.userName || fallback.uploadedBy || item.metadata?.uploadedBy || ''),
+    uploadedById: item.uploadedById || item.userId || fallback.uploadedById || null,
+    createdAt: createdAt ? new Date(createdAt).toISOString() : null,
+    updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+    chunkCount: Math.max(
+      Number(item.chunkCount ?? item.metadata?.totalChunks ?? 0),
+      Number(fallback.chunkCount ?? fallback.totalChunks ?? 0),
+    ),
+    preview: truncateText(
+      item.preview || fallback.preview || item.summary || item.content || fallback.summary || fallback.content || '',
+      260,
+    ),
+    isActive: item.isActive !== undefined ? Boolean(item.isActive) : (fallback.isActive !== undefined ? Boolean(fallback.isActive) : true),
+    storage: item.storage || fallback.storage || {
+      documentCollection: 'knowledge_documents',
+      chunkCollection: 'knowledge_chunks',
+      runtimeCollection: 'ragitems',
+    },
+  };
+}
+
+async function persistKnowledgeVisibilityArtifacts({
+  resolvedTenantId,
+  sourceId,
+  sourceType,
+  mimeType = '',
+  fileName = '',
+  title = '',
+  originalTitle = '',
+  extractedText = '',
+  pageCount = null,
+  userId = null,
+  userName = '',
+  extraMetadata = {},
+  chunkRecords = [],
+}) {
+  const documentTitle = safeString(title) || safeString(originalTitle) || safeString(fileName).replace(/\.[^.]+$/, '') || 'Documento';
+  const storage = {
+    documentCollection: 'knowledge_documents',
+    chunkCollection: 'knowledge_chunks',
+    runtimeCollection: 'ragitems',
+  };
+  const documentQuery = {
+    tenantId: resolvedTenantId || null,
+    sourceId,
+  };
+  const documentPayload = {
+    tenantId: resolvedTenantId || null,
+    sourceId,
+    title: documentTitle,
+    fileName: safeString(fileName) || documentTitle,
+    originalTitle: safeString(originalTitle) || documentTitle,
+    sourceType: safeString(sourceType) || 'document',
+    mimeType: safeString(mimeType) || '',
+    pageCount,
+    chunkCount: chunkRecords.length,
+    preview: truncateText(extractedText || '', 900),
+    uploadedBy: safeString(userName || ''),
+    uploadedById: userId ? String(userId) : null,
+    isActive: true,
+    metadata: {
+      sourceType: safeString(sourceType) || 'document',
+      fileName: safeString(fileName) || documentTitle,
+      originalTitle: safeString(originalTitle) || documentTitle,
+      mimeType: safeString(mimeType) || '',
+      pageCount,
+      totalChunks: chunkRecords.length,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: safeString(userName || ''),
+      storage,
+      ...extraMetadata,
+    },
+    lastIndexedAt: new Date(),
+  };
+
+  const documentWrite = KnowledgeDocument.findOneAndUpdate(
+    documentQuery,
+    {
+      $set: documentPayload,
+      $setOnInsert: {
+        tenantId: resolvedTenantId || null,
+        sourceId,
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+    .lean()
+    .catch((error) => {
+      console.warn('No se pudo persistir knowledge_documents:', error.message || error);
+      return null;
+    });
+
+  const chunkWrites = chunkRecords.map((record) => KnowledgeChunk.findOneAndUpdate(
+    {
+      tenantId: record.tenantId ?? resolvedTenantId ?? null,
+      sourceId: record.sourceId || sourceId,
+      chunkIndex: Number(record.chunkIndex || 0),
+    },
+    {
+      $set: {
+        ...record,
+        tenantId: record.tenantId ?? resolvedTenantId ?? null,
+        sourceId: record.sourceId || sourceId,
+        sourceType: safeString(record.sourceType || sourceType) || 'document',
+      },
+      $setOnInsert: {
+        tenantId: record.tenantId ?? resolvedTenantId ?? null,
+        sourceId: record.sourceId || sourceId,
+        chunkIndex: Number(record.chunkIndex || 0),
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+      setDefaultsOnInsert: true,
+    },
+  )
+    .lean()
+    .catch((error) => {
+      console.warn(`No se pudo persistir knowledge_chunks ${sourceId}#${record.chunkIndex}:`, error.message || error);
+      return null;
+    }));
+
+  await Promise.allSettled([documentWrite, ...chunkWrites]);
+
+  return documentPayload;
 }
 
 function escapeRegex(value) {
@@ -1701,70 +1869,145 @@ async function listKnowledgeDocuments({
     role,
   });
 
-  const query = {
+  const documentQuery = buildKnowledgeTenantFilter(resolvedTenantId);
+  const chunkQuery = {
     kind: 'knowledge',
+    ...buildKnowledgeTenantFilter(resolvedTenantId),
   };
 
   if (!includeInactive) {
-    query.isActive = true;
+    documentQuery.isActive = true;
+    chunkQuery.isActive = true;
   }
-
-  if (resolvedTenantId) {
-    query.$or = [
-      { tenantId: resolvedTenantId },
-      { tenantId: null },
-    ];
-  } else {
-    query.tenantId = null;
-  }
-
-  const items = await RagItem.find(query)
-    .sort({ createdAt: -1 })
-    .limit(500)
-    .lean();
+  const [parentDocuments, chunkItems] = await Promise.all([
+    KnowledgeDocument.find(documentQuery)
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean(),
+    RagItem.find(chunkQuery)
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean(),
+  ]);
 
   const documents = [];
   const bySource = new Map();
+  const chunkGroups = new Map();
 
-  items.forEach((item) => {
-    const scopeKey = String(item.tenantId || 'global').toLowerCase();
-    const sourceKey = String(item.sourceId || item.contentHash || item._id);
-    const mapKey = `${scopeKey}:${sourceKey}`;
+  parentDocuments.forEach((item) => {
+    const view = buildKnowledgeDocumentView(item);
+    const mapKey = buildKnowledgeViewKey(view);
+    bySource.set(mapKey, view);
+  });
+
+  chunkItems.forEach((item) => {
+    const fallback = {
+      sourceId: item.sourceId || item.contentHash || item._id,
+      tenantId: item.tenantId || null,
+      title: item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento',
+      fileName: item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento',
+      originalTitle: item.metadata?.originalTitle || item.title || 'Documento',
+      sourceType: item.metadata?.sourceType || item.source || 'knowledge',
+      uploadedBy: item.userName || '',
+      uploadedById: item.userId || null,
+      createdAt: item.createdAt || null,
+      updatedAt: item.updatedAt || null,
+      pageCount: item.metadata?.pageCount || null,
+      mimeType: item.metadata?.mimeType || null,
+      isActive: item.isActive !== false,
+      chunkCount: Number(item.metadata?.totalChunks || 1),
+      preview: item.summary || item.content || '',
+      storage: {
+        documentCollection: 'knowledge_documents',
+        chunkCollection: 'knowledge_chunks',
+        runtimeCollection: 'ragitems',
+      },
+    };
+
+    const view = buildKnowledgeDocumentView(item, fallback);
+    const mapKey = buildKnowledgeViewKey(view);
     const existing = bySource.get(mapKey);
-
-    const sourceType = item.metadata?.sourceType || item.source || 'knowledge';
-    const fileName = item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento';
-    const preview = truncateText(item.summary || item.content, 260);
-    const createdAt = item.createdAt ? new Date(item.createdAt).toISOString() : null;
+    const chunkGroup = chunkGroups.get(mapKey) || {
+      view,
+      chunkRecords: [],
+    };
+    chunkGroup.chunkRecords.push({
+      tenantId: item.tenantId || null,
+      sourceId: item.sourceId || item.contentHash || item._id,
+      chunkIndex: Number(item.metadata?.chunkIndex ?? 0),
+      title: item.title || fallback.title,
+      content: item.content || item.summary || '',
+      summary: item.summary || item.content || '',
+      sourceType: item.metadata?.sourceType || item.source || 'knowledge',
+      fileName: item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento',
+      originalTitle: item.metadata?.originalTitle || item.title || 'Documento',
+      mimeType: item.metadata?.mimeType || null,
+      pageCount: item.metadata?.pageCount || null,
+      embedding: item.embedding || undefined,
+      contentHash: item.contentHash || '',
+      importance: item.importance || 0,
+      uploadedBy: item.userName || '',
+      uploadedById: item.userId || null,
+      metadata: {
+        sourceType: item.metadata?.sourceType || item.source || 'knowledge',
+        fileName: item.metadata?.fileName || item.metadata?.originalTitle || item.title || 'Documento',
+        originalTitle: item.metadata?.originalTitle || item.title || 'Documento',
+        mimeType: item.metadata?.mimeType || '',
+        pageCount: item.metadata?.pageCount || null,
+        totalChunks: Number(item.metadata?.totalChunks || 1),
+        chunkIndex: Number(item.metadata?.chunkIndex ?? 0),
+        uploadedAt: item.metadata?.uploadedAt || item.createdAt || new Date().toISOString(),
+        uploadedBy: item.metadata?.uploadedBy || item.userName || '',
+      },
+      isActive: item.isActive !== false,
+    });
+    chunkGroups.set(mapKey, chunkGroup);
 
     if (!existing) {
-      bySource.set(mapKey, {
-        sourceId: sourceKey,
-        tenantId: item.tenantId || null,
-        title: fileName,
-        fileName: item.metadata?.fileName || null,
-        originalTitle: item.metadata?.originalTitle || null,
-        sourceType,
-        uploadedBy: item.userName || '',
-        uploadedById: item.userId || null,
-        createdAt,
-        updatedAt: createdAt,
-        pageCount: item.metadata?.pageCount || null,
-        mimeType: item.metadata?.mimeType || null,
-        isActive: item.isActive !== false,
-        chunkCount: 1,
-        preview,
-      });
+      bySource.set(mapKey, view);
       return;
     }
 
-    existing.chunkCount += 1;
-    existing.updatedAt = createdAt || existing.updatedAt;
-    existing.isActive = existing.isActive !== false || item.isActive !== false;
-    if (!existing.preview && preview) {
-      existing.preview = preview;
-    }
+    bySource.set(mapKey, {
+      ...existing,
+      title: existing.title || view.title,
+      fileName: existing.fileName || view.fileName,
+      originalTitle: existing.originalTitle || view.originalTitle,
+      sourceType: existing.sourceType || view.sourceType,
+      uploadedBy: existing.uploadedBy || view.uploadedBy,
+      uploadedById: existing.uploadedById || view.uploadedById,
+      createdAt: existing.createdAt || view.createdAt,
+      updatedAt: view.updatedAt || existing.updatedAt,
+      pageCount: existing.pageCount || view.pageCount,
+      mimeType: existing.mimeType || view.mimeType,
+      isActive: existing.isActive !== false || view.isActive !== false,
+      chunkCount: Math.max(Number(existing.chunkCount || 0), Number(view.chunkCount || 0)),
+      preview: existing.preview || view.preview,
+      storage: existing.storage || view.storage,
+    });
   });
+
+  if (!parentDocuments.length && chunkGroups.size) {
+    await Promise.allSettled(
+      Array.from(chunkGroups.values()).map((group) => persistKnowledgeVisibilityArtifacts({
+        resolvedTenantId,
+        sourceId: group.view.sourceId,
+        sourceType: group.view.sourceType,
+        mimeType: group.view.mimeType,
+        fileName: group.view.fileName,
+        title: group.view.title,
+        originalTitle: group.view.originalTitle,
+        extractedText: group.view.preview,
+        pageCount: group.view.pageCount,
+        userId: group.view.uploadedById,
+        userName: group.view.uploadedBy,
+        extraMetadata: {
+          storage: group.view.storage,
+        },
+        chunkRecords: group.chunkRecords,
+      })),
+    );
+  }
 
   bySource.forEach((value) => documents.push(value));
 
@@ -1783,20 +2026,25 @@ function buildKnowledgeDocumentScopeQuery({ tenantId, targetTenantId, role, sour
     role,
   });
 
+  const tenantFilter = buildKnowledgeTenantFilter(resolvedTenantId);
+
   const query = {
     kind: 'knowledge',
     sourceId,
+    ...tenantFilter,
   };
-
-  if (resolvedTenantId) {
-    query.tenantId = resolvedTenantId;
-  } else {
-    query.tenantId = null;
-  }
 
   return {
     resolvedTenantId,
-    query,
+    ragQuery: query,
+    documentQuery: {
+      sourceId,
+      ...tenantFilter,
+    },
+    chunkQuery: {
+      sourceId,
+      ...tenantFilter,
+    },
   };
 }
 
@@ -1807,25 +2055,37 @@ async function setKnowledgeDocumentActiveState({
   sourceId,
   isActive,
 }) {
-  const { resolvedTenantId, query } = buildKnowledgeDocumentScopeQuery({
+  const { resolvedTenantId, ragQuery, documentQuery, chunkQuery } = buildKnowledgeDocumentScopeQuery({
     tenantId,
     targetTenantId,
     role,
     sourceId,
   });
 
-  const result = await RagItem.updateMany(query, {
-    $set: {
-      isActive: Boolean(isActive),
-    },
-  });
+  const [ragResult, documentResult, chunkResult] = await Promise.all([
+    RagItem.updateMany(ragQuery, {
+      $set: {
+        isActive: Boolean(isActive),
+      },
+    }),
+    KnowledgeDocument.updateMany(documentQuery, {
+      $set: {
+        isActive: Boolean(isActive),
+      },
+    }),
+    KnowledgeChunk.updateMany(chunkQuery, {
+      $set: {
+        isActive: Boolean(isActive),
+      },
+    }),
+  ]);
 
   return {
     tenantId: resolvedTenantId,
     sourceId,
     isActive: Boolean(isActive),
-    matchedCount: result.matchedCount || 0,
-    modifiedCount: result.modifiedCount || 0,
+    matchedCount: (ragResult.matchedCount || 0) + (documentResult.matchedCount || 0) + (chunkResult.matchedCount || 0),
+    modifiedCount: (ragResult.modifiedCount || 0) + (documentResult.modifiedCount || 0) + (chunkResult.modifiedCount || 0),
   };
 }
 
@@ -1865,19 +2125,23 @@ async function deleteKnowledgeDocument({
   role,
   sourceId,
 }) {
-  const { resolvedTenantId, query } = buildKnowledgeDocumentScopeQuery({
+  const { resolvedTenantId, ragQuery, documentQuery, chunkQuery } = buildKnowledgeDocumentScopeQuery({
     tenantId,
     targetTenantId,
     role,
     sourceId,
   });
 
-  const result = await RagItem.deleteMany(query);
+  const [ragResult, documentResult, chunkResult] = await Promise.all([
+    RagItem.deleteMany(ragQuery),
+    KnowledgeDocument.deleteMany(documentQuery),
+    KnowledgeChunk.deleteMany(chunkQuery),
+  ]);
 
   return {
     tenantId: resolvedTenantId,
     sourceId,
-    deletedCount: result.deletedCount || 0,
+    deletedCount: (ragResult.deletedCount || 0) + (documentResult.deletedCount || 0) + (chunkResult.deletedCount || 0),
   };
 }
 
@@ -2138,28 +2402,38 @@ async function ingestPdfKnowledge({
 
   const buffer = decodePdfBuffer(base64Data);
   const fileHash = crypto.createHash('sha1').update(buffer).digest('hex');
-  const existing = await RagItem.findOne({
-    kind: 'knowledge',
-    sourceId: fileHash,
-    isActive: true,
-    ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
-  }).lean();
+  const [existingRagItem, existingKnowledgeDocument] = await Promise.all([
+    RagItem.findOne({
+      kind: 'knowledge',
+      sourceId: fileHash,
+      isActive: true,
+      ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+    }).lean(),
+    KnowledgeDocument.findOne({
+      sourceId: fileHash,
+      isActive: true,
+      ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+    }).lean(),
+  ]);
 
+  const existing = existingKnowledgeDocument || existingRagItem;
   if (existing) {
+    const existingView = buildKnowledgeDocumentView(existing, existingRagItem || existingKnowledgeDocument || {});
     return {
       duplicate: true,
       document: {
         sourceId: fileHash,
-        tenantId: existing.tenantId || null,
-        title: existing.metadata?.fileName || existing.metadata?.originalTitle || existing.title || fileName || 'Documento PDF',
-        fileName: existing.metadata?.fileName || fileName || null,
-        chunkCount: 0,
-        pageCount: existing.metadata?.pageCount || null,
-        createdAt: existing.createdAt || null,
-        updatedAt: existing.updatedAt || null,
+        tenantId: existingView.tenantId || null,
+        title: existingView.title || fileName || 'Documento PDF',
+        fileName: existingView.fileName || fileName || null,
+        chunkCount: existingView.chunkCount || 0,
+        pageCount: existingView.pageCount || null,
+        createdAt: existingView.createdAt || null,
+        updatedAt: existingView.updatedAt || null,
+        storage: existingView.storage,
       },
       chunksImported: 0,
-      pages: existing.metadata?.pageCount || null,
+      pages: existingView.pageCount || null,
     };
   }
 
@@ -2196,10 +2470,45 @@ async function ingestPdfKnowledge({
   }
 
   const createdItems = [];
+  const knowledgeChunkRecords = [];
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     const chunkEmbedding = await createEmbedding(chunk).catch(() => null);
     const chunkContentHash = crypto.createHash('sha1').update(chunk).digest('hex');
+    const chunkRecord = {
+      tenantId: resolvedTenantId || null,
+      sourceId: fileHash,
+      chunkIndex: i,
+      title: `${documentTitle}${chunks.length > 1 ? ` - Parte ${i + 1}/${chunks.length}` : ''}`,
+      content: chunk,
+      summary: truncateText(chunk, 1000),
+      sourceType: 'pdf',
+      fileName: fileName || `${documentTitle}.pdf`,
+      originalTitle: documentTitle,
+      mimeType,
+      pageCount,
+      embedding: chunkEmbedding || undefined,
+      contentHash: chunkContentHash,
+      importance: i === 0 ? 0.9 : 0.65,
+      uploadedBy: userName || '',
+      uploadedById: userId ? String(userId) : null,
+      metadata: {
+        sourceType: 'pdf',
+        fileName: fileName || `${documentTitle}.pdf`,
+        originalTitle: documentTitle,
+        mimeType,
+        fileHash,
+        pageCount,
+        totalChunks: chunks.length,
+        chunkIndex: i,
+        pdfInfo,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: userName || '',
+      },
+      isActive: true,
+    };
+
+    knowledgeChunkRecords.push(chunkRecord);
 
     const item = await RagItem.create({
       tenantId: resolvedTenantId || null,
@@ -2236,6 +2545,24 @@ async function ingestPdfKnowledge({
     createdItems.push(item);
   }
 
+  await persistKnowledgeVisibilityArtifacts({
+    resolvedTenantId,
+    sourceId: fileHash,
+    sourceType: 'pdf',
+    mimeType,
+    fileName: fileName || `${documentTitle}.pdf`,
+    title: documentTitle,
+    originalTitle: documentTitle,
+    extractedText,
+    pageCount,
+    userId,
+    userName,
+    extraMetadata: {
+      pdfInfo,
+    },
+    chunkRecords: knowledgeChunkRecords,
+  });
+
   const firstCreated = createdItems[0];
 
   return {
@@ -2250,6 +2577,11 @@ async function ingestPdfKnowledge({
       createdAt: firstCreated?.createdAt || new Date().toISOString(),
       updatedAt: firstCreated?.updatedAt || new Date().toISOString(),
       uploadedBy: userName || '',
+      storage: {
+        documentCollection: 'knowledge_documents',
+        chunkCollection: 'knowledge_chunks',
+        runtimeCollection: 'ragitems',
+      },
     },
     chunksImported: createdItems.length,
     pages: pageCount,
@@ -2277,29 +2609,40 @@ async function storeKnowledgeChunks({
     throw new Error('No se detectó texto utilizable en el documento');
   }
 
-  const existing = await RagItem.findOne({
-    kind: 'knowledge',
-    sourceId,
-    isActive: true,
-    ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
-  }).lean();
+  const [existingRagItem, existingKnowledgeDocument] = await Promise.all([
+    RagItem.findOne({
+      kind: 'knowledge',
+      sourceId,
+      isActive: true,
+      ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+    }).lean(),
+    KnowledgeDocument.findOne({
+      sourceId,
+      isActive: true,
+      ...(resolvedTenantId ? { tenantId: resolvedTenantId } : { tenantId: null }),
+    }).lean(),
+  ]);
+
+  const existing = existingKnowledgeDocument || existingRagItem;
 
   if (existing) {
+    const existingView = buildKnowledgeDocumentView(existing, existingRagItem || existingKnowledgeDocument || {});
     return {
       duplicate: true,
       document: {
         sourceId,
-        tenantId: existing.tenantId || null,
-        title: existing.metadata?.fileName || existing.metadata?.originalTitle || existing.title || fileName || title || 'Documento',
-        fileName: existing.metadata?.fileName || fileName || null,
-        sourceType: existing.metadata?.sourceType || existing.source || sourceType,
-        chunkCount: 0,
-        pageCount: existing.metadata?.pageCount || null,
-        createdAt: existing.createdAt || null,
-        updatedAt: existing.updatedAt || null,
+        tenantId: existingView.tenantId || null,
+        title: existingView.title || fileName || title || 'Documento',
+        fileName: existingView.fileName || fileName || null,
+        sourceType: existingView.sourceType || sourceType,
+        chunkCount: existingView.chunkCount || 0,
+        pageCount: existingView.pageCount || null,
+        createdAt: existingView.createdAt || null,
+        updatedAt: existingView.updatedAt || null,
+        storage: existingView.storage,
       },
       chunksImported: 0,
-      pages: existing.metadata?.pageCount || null,
+      pages: existingView.pageCount || null,
     };
   }
 
@@ -2311,10 +2654,43 @@ async function storeKnowledgeChunks({
   }
 
   const createdItems = [];
+  const knowledgeChunkRecords = [];
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     const chunkEmbedding = await createEmbedding(chunk).catch(() => null);
     const chunkContentHash = crypto.createHash('sha1').update(chunk).digest('hex');
+    const chunkRecord = {
+      tenantId: resolvedTenantId || null,
+      sourceId,
+      chunkIndex: i,
+      title: `${documentTitle}${chunks.length > 1 ? ` - Parte ${i + 1}/${chunks.length}` : ''}`,
+      content: chunk,
+      summary: truncateText(chunk, 1000),
+      sourceType,
+      fileName: fileName || documentTitle,
+      originalTitle: documentTitle,
+      mimeType: mimeType || '',
+      pageCount,
+      embedding: chunkEmbedding || undefined,
+      contentHash: chunkContentHash,
+      importance: i === 0 ? 0.9 : 0.65,
+      uploadedBy: userName || '',
+      uploadedById: userId ? String(userId) : null,
+      metadata: {
+        sourceType,
+        fileName: fileName || documentTitle,
+        originalTitle: documentTitle,
+        mimeType: mimeType || '',
+        pageCount,
+        totalChunks: chunks.length,
+        chunkIndex: i,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: userName || '',
+      },
+      isActive: true,
+    };
+
+    knowledgeChunkRecords.push(chunkRecord);
 
     const item = await RagItem.create({
       tenantId: resolvedTenantId || null,
@@ -2350,6 +2726,24 @@ async function storeKnowledgeChunks({
     createdItems.push(item);
   }
 
+  await persistKnowledgeVisibilityArtifacts({
+    resolvedTenantId,
+    sourceId,
+    sourceType,
+    mimeType: mimeType || '',
+    fileName: fileName || documentTitle,
+    title: documentTitle,
+    originalTitle: documentTitle,
+    extractedText: text,
+    pageCount,
+    userId,
+    userName,
+    extraMetadata: {
+      ...extraMetadata,
+    },
+    chunkRecords: knowledgeChunkRecords,
+  });
+
   const firstCreated = createdItems[0];
 
   return {
@@ -2365,6 +2759,11 @@ async function storeKnowledgeChunks({
       createdAt: firstCreated?.createdAt || new Date().toISOString(),
       updatedAt: firstCreated?.updatedAt || new Date().toISOString(),
       uploadedBy: userName || '',
+      storage: {
+        documentCollection: 'knowledge_documents',
+        chunkCollection: 'knowledge_chunks',
+        runtimeCollection: 'ragitems',
+      },
     },
     chunksImported: createdItems.length,
     pages: pageCount,

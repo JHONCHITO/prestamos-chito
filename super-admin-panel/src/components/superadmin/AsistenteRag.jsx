@@ -28,6 +28,20 @@ function getKnowledgeTagColor(sourceType = '') {
   }[normalized] || 'blue';
 }
 
+function formatKnowledgeStorage(storage = {}) {
+  const parts = [
+    storage.documentCollection,
+    storage.chunkCollection,
+    storage.runtimeCollection,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+
+  if (!parts.length) {
+    return '';
+  }
+
+  return ` Guardado en: ${parts.join(', ')}.`;
+}
+
 function createConversationId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -313,10 +327,12 @@ export default function AsistenteRag() {
       }
 
       const payload = await ragAPI.uploadKnowledge(requestPayload);
+      const storageNote = formatKnowledgeStorage(payload.document?.storage);
+      const successText = payload.message || `${getKnowledgeLabel(payload.document?.sourceType)} indexado correctamente (${payload.chunksImported || 0} fragmentos).`;
 
       setKnowledgeStatus({
         type: 'success',
-        text: payload.message || `${getKnowledgeLabel(payload.document?.sourceType)} indexado correctamente (${payload.chunksImported || 0} fragmentos).`,
+        text: `${successText}${storageNote}`,
       });
       setKnowledgeFile(null);
       setKnowledgeTitle('');
