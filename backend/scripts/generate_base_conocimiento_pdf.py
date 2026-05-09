@@ -21,6 +21,9 @@ from reportlab.platypus import (
 ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = ROOT / "docs"
 OUT_FILE = OUT_DIR / "Base_Conocimiento_RAG_Prestamos_Chito.pdf"
+OFFICE_OUT_FILE = OUT_DIR / "Base_Conocimiento_RAG_Oficina_Norte_Cali.pdf"
+OFFICE_NAME = "Oficina Norte Cali"
+OFFICE_TENANT_ID = "oficina_norte_jd8"
 
 
 def make_styles():
@@ -167,12 +170,15 @@ def draw_page(canvas, doc):
     canvas.restoreState()
 
 
-def build_story(styles):
+def build_story(styles, office_label=None, tenant_label=None, include_office_appendix=False):
     story = []
 
     story.append(Spacer(1, 2.2 * cm))
     story.append(Paragraph("Base de Conocimiento RAG", styles["DocTitle"]))
-    story.append(Paragraph("Prestamos Chito - Operacion completa para IA", styles["DocSubtitle"]))
+    if office_label:
+        story.append(Paragraph(f"{office_label} - Prestamos Chito", styles["DocSubtitle"]))
+    else:
+        story.append(Paragraph("Prestamos Chito - Operacion completa para IA", styles["DocSubtitle"]))
     story.append(Spacer(1, 0.3 * cm))
     story.append(
         Paragraph(
@@ -197,6 +203,15 @@ def build_story(styles):
             Paragraph("Colombian pesos con separador de miles", styles["Body"]),
         ],
     ]
+    if office_label or tenant_label:
+        cover_rows.append(
+            [
+                Paragraph("<b>Oficina objetivo</b>", styles["Body"]),
+                Paragraph(office_label or "General", styles["Body"]),
+                Paragraph("<b>Tenant</b>", styles["Body"]),
+                Paragraph(tenant_label or "Global", styles["Body"]),
+            ]
+        )
     story.append(Spacer(1, 0.2 * cm))
     story.append(build_table(cover_rows, [3.0 * cm, 4.0 * cm, 3.5 * cm, 5.0 * cm]))
     story.append(Spacer(1, 0.45 * cm))
@@ -336,6 +351,9 @@ def build_story(styles):
         ],
     ]
     story.append(build_table(collection_rows, [3.2 * cm, 7.0 * cm, 5.2 * cm]))
+    if include_office_appendix:
+        append_office_appendix(story, styles, office_label=office_label, tenant_label=tenant_label)
+
     story.append(Spacer(1, 0.4 * cm))
 
     add_section(
@@ -585,25 +603,195 @@ def build_story(styles):
     return story
 
 
+def append_office_appendix(story, styles, office_label=None, tenant_label=None):
+    office_name = office_label or OFFICE_NAME
+    tenant_id = tenant_label or OFFICE_TENANT_ID
+
+    add_section(
+        story,
+        styles,
+        "18. Perfil operativo de la oficina",
+        [
+            f"{office_name} es la oficina objetivo de esta edicion. La IA debe priorizar este contexto y no mezclar informacion con otras oficinas.",
+            f"El tenant operativo es {tenant_id}. Los datos variables como cartera, saldos, mora, pagos y turnos deben consultarse en la base de datos, no en el PDF.",
+        ],
+        [
+            "No mezclar datos entre oficinas.",
+            "No usar credenciales ni secretos dentro del conocimiento.",
+            "Responder con contexto de la oficina activa primero.",
+            "Si el dato cambia mucho, dejarlo en base de datos y no en texto fijo.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "19. Flujo ideal cuando un cliente escribe",
+        [
+            "La IA debe reconocer si el usuario quiere informacion general, quiere un prestamo, quiere pagar, quiere consultar su saldo o necesita un humano.",
+            "Despues debe responder solo con lo necesario y no escribir bloques largos si la pregunta es simple.",
+        ],
+        [
+            "Saludar de forma breve.",
+            "Identificar la intencion principal.",
+            "Pedir solo los datos faltantes e indispensables.",
+            "Verificar el dato antes de afirmarlo.",
+            "Cerrar el hilo cuando ya quedo resuelto.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "20. Flujo para solicitud de prestamo",
+        [
+            "Si la persona pide un prestamo, la IA debe actuar como asesor comercial inteligente y no como un resumen de cartera interna.",
+            "Debe explicar requisitos, pasos y condiciones generales, y luego pedir solo la informacion minima para continuar el proceso.",
+        ],
+        [
+            "Nombre completo.",
+            "Cedula o documento.",
+            "Celular de contacto.",
+            "Ciudad o barrio de referencia.",
+            "Monto aproximado si ya lo tiene claro.",
+            "Tiempo estimado para pagar, si aplica.",
+            "No mostrar datos de otros clientes.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "21. Privacidad y confidencialidad",
+        [
+            "La IA debe proteger la informacion sensible del negocio y de los clientes. No todo lo que esta en la base debe mostrarse a cualquier usuario.",
+            "Las respuestas publicas por chat o voz deben ser utiles, pero cuidadosas.",
+        ],
+        [
+            "No revelar cartera completa a clientes normales.",
+            "No mostrar mora general o rankings internos.",
+            "No compartir datos de terceros.",
+            "No exponer tokens, passwords o secretos de Meta.",
+            "Si falta verificacion, pedir el dato minimo o derivar a humano.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "22. Flujo por canal",
+        [
+            "WhatsApp, Instagram, Facebook, Telegram y Web pueden enviar mensajes al mismo cerebro IA, pero cada uno debe respetar la oficina conectada.",
+            "La IA debe responder desde el mismo canal cuando la integracion y el modo de respuesta lo permitan.",
+        ],
+        [
+            "WhatsApp: respuesta automatica y seguimiento.",
+            "Instagram: respuesta automatica si la cuenta esta conectada.",
+            "Facebook: mismo criterio que WhatsApp e Instagram.",
+            "Telegram: visible en la oficina conectada y en superadmin para supervision.",
+            "Web: canal de consulta interno o publico segun la implementacion.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "23. Matriz de respuesta recomendada",
+        [
+            "La matriz ayuda a que la IA no improvise y mantenga una voz consistente.",
+        ],
+        [
+            "Cliente pregunta requisitos -> responder requisitos y pedir lo faltante.",
+            "Cliente pregunta saldo propio -> verificar el cliente y responder solo ese saldo.",
+            "Cliente pregunta por otro cliente -> negar acceso y orientar a canal autorizado.",
+            "Cliente pregunta por horario o sede -> responder con la oficina activa o la sede correcta.",
+            "Cliente escribe solo hola -> saludar, ofrecer ayuda y preguntar en que puede apoyar.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "24. Cierre automatico de conversacion",
+        [
+            "Cuando la IA ya resolvio la duda, debe invitar a cerrar el hilo para dejar espacio a otras conversaciones.",
+            "El sistema puede marcar la conversacion como cerrada si ya no quedan pendientes.",
+        ],
+        [
+            "Frase de cierre sugerida: 'Hay algo mas en lo que te pueda ayudar?'",
+            "Si el cliente ya no responde, el hilo puede cerrarse automaticamente segun la regla de la oficina.",
+            "Si el usuario escribe otra pregunta, la conversacion debe reabrirse de forma natural.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "25. Datos vivos vs documento",
+        [
+            "Este PDF debe actuar como manual operativo y no como reemplazo de la base de datos.",
+            "La informacion que cambia todo el tiempo debe consultarse en MongoDB y en los modulos operativos, no escribirse como texto fijo en el PDF.",
+        ],
+        [
+            "Vivos: clientes, pagos, prestamos, mora, campanas y estados.",
+            "Estables: reglas de respuesta, guiones, politicas, canales y privacidad.",
+            "Mixtos: datos de sede, mensajes de bienvenida, horarios y contactos autorizados.",
+            "Si un dato cambia mucho, no fijarlo en el documento; dejarlo en la base de datos o en la configuracion de la oficina.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "26. Ejemplos de respuestas inteligentes",
+        [
+            "Estos ejemplos sirven como referencia para que la IA mantenga el tono correcto.",
+        ],
+        [
+            "Si preguntan por requisitos: Claro, con gusto te explico los requisitos basicos y luego revisamos tu caso.",
+            "Si piden un prestamo: Perfecto, para ayudarte necesito nombre, cedula, celular, ciudad y el monto aproximado.",
+            "Si preguntan por informacion interna de otros clientes: No puedo mostrar datos de terceros, pero si quieres puedo revisar tu caso o darte informacion general.",
+            "Si ya se resolvio: Listo, quedo atento por si necesitas algo mas.",
+        ],
+    )
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     styles = make_styles()
-    doc = SimpleDocTemplate(
-        str(OUT_FILE),
-        pagesize=A4,
-        leftMargin=1.5 * cm,
-        rightMargin=1.5 * cm,
-        topMargin=1.7 * cm,
-        bottomMargin=1.4 * cm,
-        title="Base de Conocimiento RAG - Prestamos Chito",
-        author="Codex",
-        subject="Documento maestro para RAG y operaciones",
-    )
+    outputs = [
+        (
+            OUT_FILE,
+            "Base de Conocimiento RAG - Prestamos Chito",
+            build_story(styles),
+        ),
+        (
+            OFFICE_OUT_FILE,
+            f"Base de Conocimiento RAG - {OFFICE_NAME}",
+            build_story(
+                styles,
+                office_label=OFFICE_NAME,
+                tenant_label=OFFICE_TENANT_ID,
+                include_office_appendix=True,
+            ),
+        ),
+    ]
 
-    story = build_story(styles)
-    doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
-    print(f"PDF generado en: {OUT_FILE}")
+    for output_file, title, story in outputs:
+        doc = SimpleDocTemplate(
+            str(output_file),
+            pagesize=A4,
+            leftMargin=1.5 * cm,
+            rightMargin=1.5 * cm,
+            topMargin=1.7 * cm,
+            bottomMargin=1.4 * cm,
+            title=title,
+            author="Codex",
+            subject="Documento maestro para RAG y operaciones",
+        )
+        doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+        print(f"PDF generado en: {output_file}")
 
 
 if __name__ == "__main__":
