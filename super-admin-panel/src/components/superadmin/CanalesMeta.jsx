@@ -77,6 +77,44 @@ function isChannelReady(integration, config = {}) {
   );
 }
 
+function getWhatsAppSetupIssues(integration, config = {}) {
+  const issues = [];
+
+  if (!integration?.active) {
+    issues.push('activar la integracion');
+  }
+
+  if (!integration?.autoReplyEnabled) {
+    issues.push('activar auto respuesta');
+  }
+
+  if (!config.enabled) {
+    issues.push('habilitar WhatsApp');
+  }
+
+  if (!String(config.phoneNumberId || config.senderId || '').trim()) {
+    issues.push('Phone Number ID');
+  }
+
+  if (!String(config.businessAccountId || '').trim()) {
+    issues.push('Business Account ID');
+  }
+
+  if (!String(config.accessToken || '').trim()) {
+    issues.push('Access token permanente');
+  }
+
+  if (!String(integration?.webhookVerifyToken || config.verifyToken || '').trim()) {
+    issues.push('verify token webhook');
+  }
+
+  if (!String(integration?.webhookAppSecret || config.appSecret || '').trim()) {
+    issues.push('app secret webhook');
+  }
+
+  return issues;
+}
+
 const statusColor = {
   draft: 'default',
   queued: 'blue',
@@ -416,10 +454,33 @@ export default function CanalesMeta() {
             <Text strong>Webhook callback URL</Text>
             <Input value={WEBHOOK_URL} readOnly />
             <Text type="secondary">
-              Usa esta URL en Meta Developer. El verify token debe coincidir con el configurado en la oficina seleccionada.
+              Usa una URL publica HTTPS en Meta Developer. El verify token debe coincidir con el configurado en la oficina seleccionada.
             </Text>
           </Space>
         </Card>
+
+        {(
+          String(WEBHOOK_URL).includes('localhost') ||
+          String(WEBHOOK_URL).includes('127.0.0.1') ||
+          String(WEBHOOK_URL).includes('::1') ||
+          getWhatsAppSetupIssues(integration, integration?.channels?.whatsapp || {}).length > 0
+        ) && (
+          <Alert
+            type="warning"
+            showIcon
+            message="WhatsApp no puede responder todavia"
+            description={
+              <Space direction="vertical" size={2}>
+                {String(WEBHOOK_URL).includes('localhost') || String(WEBHOOK_URL).includes('127.0.0.1') || String(WEBHOOK_URL).includes('::1')
+                  ? <Text>El webhook actual apunta a localhost. Para Meta debe ser una URL publica HTTPS del backend desplegado.</Text>
+                  : null}
+                {getWhatsAppSetupIssues(integration, integration?.channels?.whatsapp || {}).length > 0
+                  ? <Text>Faltan estos datos para activar WhatsApp: {getWhatsAppSetupIssues(integration, integration?.channels?.whatsapp || {}).join(', ')}.</Text>
+                  : null}
+              </Space>
+            }
+          />
+        )}
 
         <Card size="small" title="Que va en cada campo">
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
