@@ -24,6 +24,7 @@ OUT_FILE = OUT_DIR / "Base_Conocimiento_RAG_Prestamos_Chito.pdf"
 OFFICE_OUT_FILE = OUT_DIR / "Base_Conocimiento_RAG_Oficina_Norte_Cali.pdf"
 OFFICE_NAME = "Oficina Norte Cali"
 OFFICE_TENANT_ID = "oficina_norte_jd8"
+OFFICE_CONTACTS = ["3187092130", "3009013672"]
 
 
 def make_styles():
@@ -614,12 +615,14 @@ def append_office_appendix(story, styles, office_label=None, tenant_label=None):
         [
             f"{office_name} es la oficina objetivo de esta edicion. La IA debe priorizar este contexto y no mezclar informacion con otras oficinas.",
             f"El tenant operativo es {tenant_id}. Los datos variables como cartera, saldos, mora, pagos y turnos deben consultarse en la base de datos, no en el PDF.",
+            f"Telefonos autorizados de contacto para {office_name}: {', '.join(OFFICE_CONTACTS)}.",
         ],
         [
             "No mezclar datos entre oficinas.",
             "No usar credenciales ni secretos dentro del conocimiento.",
             "Responder con contexto de la oficina activa primero.",
             "Si el dato cambia mucho, dejarlo en base de datos y no en texto fijo.",
+            "Si preguntan como llamar a la oficina, entregar los telefonos autorizados sin rodeos.",
         ],
     )
 
@@ -750,6 +753,7 @@ def append_office_appendix(story, styles, office_label=None, tenant_label=None):
         [
             "Si preguntan por requisitos: Claro, con gusto te explico los requisitos basicos y luego revisamos tu caso.",
             "Si piden un prestamo: Perfecto, para ayudarte necesito nombre, cedula, celular, ciudad y el monto aproximado.",
+            "Si preguntan por la oficina: Puedes comunicarte con la oficina Norte Cali en 3187092130 o 3009013672.",
             "Si preguntan por informacion interna de otros clientes: No puedo mostrar datos de terceros, pero si quieres puedo revisar tu caso o darte informacion general.",
             "Si ya se resolvio: Listo, quedo atento por si necesitas algo mas.",
         ],

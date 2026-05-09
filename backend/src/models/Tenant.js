@@ -13,6 +13,10 @@ const tenantSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  telefonos: {
+    type: [String],
+    default: []
+  },
   tenantId: {
     type: String,
     required: true,

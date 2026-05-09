@@ -119,6 +119,9 @@ const KNOWLEDGE_VECTOR_INDEX = String(
     'vector_ragitems',
 ).trim() || 'vector_ragitems';
 const VECTOR_NUM_CANDIDATES = Math.max(20, Number(process.env.RAG_VECTOR_NUM_CANDIDATES || 100));
+const OFFICE_CONTACT_FALLBACKS = {
+  oficina_norte_jd8: ['3187092130', '3009013672'],
+};
 
 function flattenTextValue(value, seen = new WeakSet()) {
   if (value == null) {
@@ -578,6 +581,32 @@ function formatDate(value) {
     month: '2-digit',
     day: '2-digit',
   }).format(date);
+}
+
+function extractContactNumbers(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .map((entry) => safeString(entry))
+    .flatMap((entry) => entry.split(/[\n,;/|]+/g))
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function formatOfficeContacts(numbers = []) {
+  const uniqueNumbers = Array.from(
+    new Set(
+      numbers
+        .map((value) => safeString(value).replace(/\s+/g, ' '))
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  );
+
+  if (!uniqueNumbers.length) {
+    return '';
+  }
+
+  return uniqueNumbers.join(' / ');
 }
 
 function daysBetween(start, end = new Date()) {
@@ -1682,6 +1711,13 @@ async function buildTenantSnapshot({ tenantId, role, userId }) {
     tenantScope ? Sede.find({ tenantId: tenantScope }).sort({ createdAt: -1 }).lean() : Promise.resolve([]),
   ]);
 
+  const fallbackContacts = OFFICE_CONTACT_FALLBACKS[tenantScope] || [];
+  const officeContacts = formatOfficeContacts([
+    ...extractContactNumbers(tenant?.telefonos || []),
+    ...extractContactNumbers(tenant?.telefono || ''),
+    ...fallbackContacts,
+  ]);
+
   const loanIds = loans.map((loan) => loan._id);
   const paymentFilter = tenantScope ? { tenantId: tenantScope } : {};
   if (role === 'cobrador' && userId && loanIds.length) {
@@ -1727,6 +1763,7 @@ async function buildTenantSnapshot({ tenantId, role, userId }) {
   const sectionText = [
     `Resumen operativo para ${title}.`,
     tenantScope ? `Tenant ID: ${tenantScope}` : '',
+    officeContacts ? `Telefonos de contacto de la oficina: ${officeContacts}.` : '',
     `Clientes activos: ${activeClients} de ${clientCount}.`,
     `Prestamos activos: ${activeLoans} de ${loanCount}.`,
     `Prestamos pagados: ${paidLoans}.`,
@@ -1768,6 +1805,16 @@ async function buildTenantSnapshot({ tenantId, role, userId }) {
       score: 1,
       importance: 1,
     }),
+    officeContacts
+      ? buildSource({
+          id: tenantScope ? `tenant-contact:${tenantScope}` : 'tenant-contact:global',
+          title: `Contacto de ${title}`,
+          type: 'contact',
+          snippet: `Telefonos de contacto de la oficina: ${officeContacts}.`,
+          score: 1,
+          importance: 1,
+        })
+      : null,
     ...recentLoans.map((loan) =>
       buildSource({
         id: `loan:${loan._id}`,
@@ -1782,7 +1829,7 @@ async function buildTenantSnapshot({ tenantId, role, userId }) {
         importance: 0.8,
       }),
     ),
-  ];
+  ].filter(Boolean);
 
   return {
     title,
@@ -3534,6 +3581,7 @@ async function answerRagQuestion({
     'No inventes clientes, saldos, fechas ni estados.',
     'No reveles carteras completas, rankings, mora general ni datos de otros clientes en consultas normales. Si la pregunta es de un prospecto o de alguien que pide un prestamo, responde solo con requisitos, pasos y orientacion general.',
     'Si la consulta es para solicitar un prestamo, responde con informacion inteligente, breve y util: requisitos, pasos, condiciones generales y solo los datos indispensables que falten. Si necesitas hacer preguntas, pide solo nombre, cedula, celular, ciudad y monto aproximado si aplica. No hagas listas innecesarias ni expongas datos internos.',
+    'Si te preguntan por telefono, numero de contacto o como llamar a la oficina, responde con los telefonos de la oficina activa que aparezcan en el contexto recuperado. Si hay varios numeros, entregalos todos de forma clara y breve.',
     'Si la pregunta trata sobre un cliente o prestamo concreto, enfocate solo en ese caso.',
     'Si el usuario pide una preferencia duradera o una nota importante, resume esa informacion en memory_summary.',
     'Agrega "should_close_conversation": true cuando la respuesta ya quede resuelta y no haga falta seguir el hilo; usa false solo si de verdad debes dejar el caso abierto.',
