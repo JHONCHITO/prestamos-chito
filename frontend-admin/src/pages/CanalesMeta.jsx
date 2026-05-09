@@ -57,6 +57,25 @@ const channelLabel = {
   facebook: 'Facebook',
 };
 
+function isChannelReady(integration, config = {}) {
+  const senderId = String(
+    config.senderId ||
+      config.phoneNumberId ||
+      config.pageId ||
+      config.instagramUserId ||
+      config.businessAccountId ||
+      '',
+  ).trim();
+  const accessToken = String(config.accessToken || '').trim();
+
+  return Boolean(
+    senderId &&
+      accessToken &&
+      integration?.active !== false &&
+      integration?.autoReplyEnabled !== false,
+  );
+}
+
 const statusColor = {
   draft: 'default',
   queued: 'blue',
@@ -312,12 +331,13 @@ export default function CanalesMeta() {
 
   const summaryCard = (title, field, channelKey) => {
     const config = integration?.channels?.[channelKey] || {};
+    const ready = isChannelReady(integration, config);
     return (
       <Card size="small" style={{ height: '100%' }}>
         <Space direction="vertical" style={{ width: '100%' }} size={4}>
           <Space style={{ justifyContent: 'space-between', width: '100%' }}>
             <Text strong>{title}</Text>
-            <Tag color={config.enabled ? 'green' : 'red'}>{config.enabled ? 'Activo' : 'Inactivo'}</Tag>
+            <Tag color={ready ? 'green' : 'red'}>{ready ? 'Activo' : 'Inactivo'}</Tag>
           </Space>
           <Text type="secondary">{field}: {config.senderId || config.phoneNumberId || config.pageId || config.instagramUserId || '-'}</Text>
           <Text type="secondary">Modo: {config.defaultReplyMode || 'auto'}</Text>

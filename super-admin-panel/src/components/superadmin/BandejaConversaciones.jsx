@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Card, Empty, Input, List, Space, Spin, Tag, Typography, Divider } from 'antd';
+import { Badge, Button, Card, Empty, Input, List, Space, Spin, Tag, Typography, Divider, message } from 'antd';
 import {
   ClockCircleOutlined,
   InboxOutlined,
@@ -7,7 +7,9 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
+import { io } from 'socket.io-client';
 import { ragAPI } from '../../api/api';
+import { SOCKET_URL } from '../../api/baseUrl';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -134,6 +136,9 @@ export default function BandejaConversaciones() {
   const [messages, setMessages] = useState([]);
   const [status, setStatus] = useState('');
   const bottomRef = useRef(null);
+  const searchRef = useRef(search);
+  const tenantScopeRef = useRef(tenantScope);
+  const selectedConversationIdRef = useRef(selectedConversationId);
 
   const userName = localStorage.getItem('userName') || 'Super Admin';
 
@@ -148,6 +153,18 @@ export default function BandejaConversaciones() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
+
+  useEffect(() => {
+    searchRef.current = search;
+  }, [search]);
+
+  useEffect(() => {
+    tenantScopeRef.current = tenantScope;
+  }, [tenantScope]);
+
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
 
   useEffect(() => {
     loadConversations();
@@ -165,16 +182,67 @@ export default function BandejaConversaciones() {
     }
   }, [selectedConversationId]);
 
+  useEffect(() => {
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+
+    const refreshConversation = (event = {}) => {
+      const currentScope = String(tenantScopeRef.current || '').trim().toLowerCase();
+      const eventTenantId = toDisplayText(event.tenantId).trim().toLowerCase();
+      if (currentScope && eventTenantId && currentScope !== eventTenantId) {
+        return;
+      }
+
+      const eventConversationId = toDisplayText(event.conversationId || '').trim();
+      const selectedId = selectedConversationIdRef.current;
+
+      if (eventConversationId && (!selectedId || selectedId === eventConversationId)) {
+        loadMessages(eventConversationId);
+      }
+
+      loadConversations({ silent: true });
+
+      const channelText = channelLabel(event.channel);
+      if (event.autoReplyStatus === 'failed') {
+        message.warning(
+          `La respuesta automática falló por ${channelText}: ${toDisplayText(event.autoReplyError) || 'revisa la configuración de Meta'}`,
+          5,
+        );
+      } else if (event.autoReplyStatus === 'sent') {
+        message.success(`La IA respondió automáticamente por ${channelText}.`, 4);
+      } else {
+        message.info(`Nuevo mensaje recibido por ${channelText}.`, 4);
+      }
+    };
+
+    socket.on('connect', () => {
+      socket.emit('join-superadmin');
+    });
+    socket.on('rag:conversation-updated', refreshConversation);
+    socket.on('meta:reply-status', refreshConversation);
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
   async function loadConversations({ silent = false } = {}) {
     if (!silent) {
       setLoadingConversations(true);
     }
 
     try {
+      const currentSearch = searchRef.current.trim();
+      const currentTenantScope = tenantScopeRef.current.trim();
+      const currentSelectedConversationId = selectedConversationIdRef.current;
       const payload = await ragAPI.conversations({
         limit: 60,
-        search: search.trim() || undefined,
-        targetTenantId: tenantScope.trim() || undefined,
+        search: currentSearch || undefined,
+        targetTenantId: currentTenantScope || undefined,
       });
       const items = Array.isArray(payload.conversations) ? payload.conversations : [];
 
@@ -184,9 +252,9 @@ export default function BandejaConversaciones() {
         setSelectedConversationId('');
         setSelectedConversation(null);
         setMessages([]);
-      } else if (!selectedConversationId) {
+      } else if (!currentSelectedConversationId) {
         setSelectedConversationId(items[0].conversationId);
-      } else if (!items.some((item) => item.conversationId === selectedConversationId)) {
+      } else if (!items.some((item) => item.conversationId === currentSelectedConversationId)) {
         setSelectedConversationId(items[0]?.conversationId || '');
       }
 
@@ -207,8 +275,9 @@ export default function BandejaConversaciones() {
     setLoadingMessages(true);
 
     try {
+      const currentTenantScope = tenantScopeRef.current.trim();
       const payload = await ragAPI.conversationMessages(conversationId, {
-        targetTenantId: tenantScope.trim() || undefined,
+        targetTenantId: currentTenantScope || undefined,
       });
       setSelectedConversation(payload.conversation || null);
       setMessages(Array.isArray(payload.messages) ? payload.messages : []);
@@ -344,6 +413,11 @@ export default function BandejaConversaciones() {
                           {toDisplayText(item.userName) || toDisplayText(item.title) || toDisplayText(item.preview) || 'Conversación'}
                         </Text>
                         <Tag color={channelColor(item.channel)}>{channelLabel(item.channel)}</Tag>
+                        {item.conversationStatus ? (
+                          <Tag color={item.conversationStatus === 'closed' ? 'green' : 'gold'}>
+                            {item.conversationStatus === 'closed' ? 'Cerrada' : 'Abierta'}
+                          </Tag>
+                        ) : null}
                       </Space>
                       <Text type="secondary" style={{ fontSize: 12, color: '#475569' }}>
                         {toDisplayText(item.preview) || 'Sin vista previa'}
@@ -372,6 +446,11 @@ export default function BandejaConversaciones() {
           extra={
             <Space>
               <Badge status={loadingMessages ? 'processing' : 'success'} />
+              {selectedConversation?.conversationStatus ? (
+                <Tag color={selectedConversation.conversationStatus === 'closed' ? 'green' : 'gold'}>
+                  {selectedConversation.conversationStatus === 'closed' ? 'Cerrada' : 'Abierta'}
+                </Tag>
+              ) : null}
               <Text type="secondary">{loadingMessages ? 'Cargando...' : 'Actualizada'}</Text>
             </Space>
           }

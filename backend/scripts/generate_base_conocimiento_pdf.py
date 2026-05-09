@@ -531,6 +531,43 @@ def build_story(styles):
         ],
     )
 
+    add_section(
+        story,
+        styles,
+        "16. Flujo de mensajes por canal",
+        [
+            "Cuando un cliente escribe por WhatsApp, Instagram, Facebook o Telegram, el mensaje debe entrar al cerebro IA de la oficina activa y quedar visible en la bandeja de conversacion de oficina y superadmin.",
+            "La IA responde automaticamente cuando la integracion esta activa y el modo de respuesta lo permite.",
+            "El cobrador no debe recibir cada mensaje de cliente por defecto. Solo debe entrar cuando el caso se le asigna, se escala manualmente o la oficina define una regla de atencion especifica.",
+            "Al terminar una respuesta util, la IA debe cerrar con una pregunta breve del tipo: '¿Hay algo mas en lo que te pueda ayudar?'. Si no hay mas mensajes, el hilo se marca como cerrado para liberar atencion.",
+        ],
+        [
+            "WhatsApp: respuesta automatica y seguimiento de cartera.",
+            "Instagram: mismo flujo que WhatsApp si la cuenta esta conectada.",
+            "Facebook Messenger: mismo flujo que WhatsApp si la pagina esta conectada.",
+            "Telegram: visible en la oficina conectada y en superadmin para supervisar el hilo.",
+            "Oficina y superadmin: monitoreo en tiempo real del hilo y del estado cerrado/abierto.",
+        ],
+    )
+
+    add_section(
+        story,
+        styles,
+        "17. Guion recomendado de respuesta",
+        [
+            "La IA debe contestar con tono profesional, claro, cordial y corto. Si el cliente pide informacion general, la respuesta debe ser directa. Si hace falta un dato, se debe pedir solo ese dato.",
+            "Si el tema ya quedo resuelto, la IA debe invitar al cierre y no seguir alargando la conversacion.",
+        ],
+        [
+            "Saludar de forma breve y natural.",
+            "Responder solo lo que el cliente pregunto.",
+            "No inventar datos ni prometer cosas no autorizadas.",
+            "Usar montos en pesos colombianos y leerlos de forma natural en voz.",
+            "Si el cliente pide algo fuera del alcance, escalar a humano o pedir el dato faltante.",
+            "Si la respuesta queda completa, terminar con una frase corta de cierre: '¿Hay algo mas en lo que te pueda ayudar?'.",
+        ],
+    )
+
     story.append(Spacer(1, 0.4 * cm))
     story.append(
         Paragraph(

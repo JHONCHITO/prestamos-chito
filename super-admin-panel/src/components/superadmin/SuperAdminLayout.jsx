@@ -94,6 +94,37 @@ const SuperAdminLayout = () => {
       message.success(`✅ ${data.mensaje}`, 3);
     });
 
+    const handleMetaConversation = (data = {}) => {
+      const channel = String(data.channel || 'web').trim().toLowerCase();
+      const channelLabel = {
+        whatsapp: 'WhatsApp',
+        instagram: 'Instagram',
+        facebook: 'Facebook',
+        telegram: 'Telegram',
+        web: 'Web',
+      }[channel] || channel || 'Canal';
+      const userLabel = String(data.userName || data.sourceId || data.recipientId || 'Nuevo mensaje').trim();
+      const preview = String(data.question || data.preview || data.answer || '').trim();
+
+      if (data.autoReplyStatus === 'failed') {
+        message.warning(`La IA no pudo responder por ${channelLabel}${preview ? `: ${preview.slice(0, 80)}` : ''}`, 5);
+      } else if (data.autoReplyStatus === 'sent') {
+        message.success(`La IA respondió automáticamente por ${channelLabel}${userLabel ? ` para ${userLabel}` : ''}.`, 4);
+      } else {
+        message.info(`Nuevo mensaje en ${channelLabel}${userLabel ? ` de ${userLabel}` : ''}${preview ? `: ${preview.slice(0, 80)}` : ''}.`, 4);
+      }
+
+      if (document.hidden) {
+        document.title = `📩 Nuevo mensaje - ${channelLabel}`;
+        setTimeout(() => {
+          document.title = 'Panel de Control Galáctico';
+        }, 8000);
+      }
+    };
+
+    newSocket.on('rag:conversation-updated', handleMetaConversation);
+    newSocket.on('meta:reply-status', handleMetaConversation);
+
     newSocket.on('connect_error', (error) => {
       console.error('❌ Error de conexión WebSocket:', error);
       message.warning('Conectando al servidor de notificaciones...', 2);

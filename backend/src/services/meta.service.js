@@ -56,6 +56,44 @@ function normalizeMetaChannel(channel = '') {
   return normalized;
 }
 
+function normalizeReplyMode(value = '') {
+  const normalized = safeString(value).toLowerCase();
+
+  if (normalized === 'manual') {
+    return 'human_only';
+  }
+
+  if (normalized === 'auto_only') {
+    return 'auto';
+  }
+
+  if (['auto', 'human_only', 'auto_then_human'].includes(normalized)) {
+    return normalized;
+  }
+
+  return 'auto';
+}
+
+function emitMetaRealtimeEvent(app, tenantId, eventName, payload = {}) {
+  const io = app?.get?.('io');
+  if (!io || !eventName) {
+    return;
+  }
+
+  const rooms = new Set();
+  const cleanTenantId = normalizeTenantId(tenantId);
+
+  if (cleanTenantId) {
+    rooms.add(`tenant-${cleanTenantId}`);
+  }
+
+  rooms.add('superadmin-room');
+
+  for (const room of rooms) {
+    io.to(room).emit(eventName, payload);
+  }
+}
+
 function buildMetaConversationId({
   channel = 'whatsapp',
   sourceId = '',
@@ -219,6 +257,18 @@ function channelAccessToken(integration, channel) {
   return safeString(channelConfig(integration, channel)?.accessToken || '');
 }
 
+function channelIsReady(integration, channel) {
+  const senderId = channelSenderId(integration, channel);
+  const accessToken = channelAccessToken(integration, channel);
+
+  return Boolean(
+    senderId &&
+      accessToken &&
+      integration?.active !== false &&
+      integration?.autoReplyEnabled !== false,
+  );
+}
+
 function channelAppSecret(integration, channel) {
   return safeString(
     channelConfig(integration, channel)?.appSecret ||
@@ -240,15 +290,15 @@ function channelGraphVersion(integration, channel) {
 function shouldAutoReply(integration, channel) {
   const config = channelConfig(integration, channel);
 
-  if (!integration?.active || integration.autoReplyEnabled === false) {
+  if (!channelIsReady(integration, channel)) {
     return false;
   }
 
-  if (config.enabled === false) {
+  if (config.defaultReplyMode === 'human_only') {
     return false;
   }
 
-  return config.defaultReplyMode !== 'human_only';
+  return true;
 }
 
 function sanitizeChannelConfig(input = {}, channel = 'whatsapp') {
@@ -260,9 +310,12 @@ function sanitizeChannelConfig(input = {}, channel = 'whatsapp') {
       input.instagramUserId ||
       '',
   );
+  const explicitEnabled = input.enabled !== undefined && input.enabled !== null && input.enabled !== '';
 
   const config = {
-    enabled: input.enabled === true || String(input.enabled).toLowerCase() === 'true',
+    enabled: explicitEnabled
+      ? input.enabled === true || String(input.enabled).toLowerCase() === 'true'
+      : Boolean(sender && safeString(input.accessToken || '')),
     senderId: sender,
     accessToken: safeString(input.accessToken || ''),
     verifyToken: safeString(input.verifyToken || ''),
@@ -272,9 +325,7 @@ function sanitizeChannelConfig(input = {}, channel = 'whatsapp') {
     phoneNumberId: safeString(input.phoneNumberId || ''),
     instagramUserId: safeString(input.instagramUserId || ''),
     graphApiVersion: safeString(input.graphApiVersion || ''),
-    defaultReplyMode: ['auto', 'human_only', 'auto_then_human'].includes(input.defaultReplyMode)
-      ? input.defaultReplyMode
-      : 'auto',
+    defaultReplyMode: normalizeReplyMode(input.defaultReplyMode),
     welcomeMessage: safeString(input.welcomeMessage || ''),
     fallbackMessage: safeString(input.fallbackMessage || ''),
     notes: safeString(input.notes || ''),
@@ -1443,26 +1494,42 @@ async function processMetaInboundEvent({
     channel,
     userName: event.userName || '',
     question: messageText,
+    answer: reply.answer || '',
+    conversationStatus: reply.conversationStatus || 'open',
+    sourceId: event.sourceId || '',
+    recipientId: event.recipientId || '',
     updatedAt: new Date().toISOString(),
   };
 
   try {
-    const io = app?.get?.('io');
-    if (io) {
-      io.to(`tenant-${String(tenantId).toLowerCase()}`).emit('rag:conversation-updated', payload);
-      io.to('superadmin-room').emit('rag:conversation-updated', payload);
-    }
+    emitMetaRealtimeEvent(app, tenantId, 'rag:conversation-updated', payload);
   } catch (error) {
     console.error('Error emitiendo evento Meta:', error.message);
   }
 
   if (shouldAutoReply(integration, channel)) {
-    await sendMetaTextMessage({
-      integration,
-      channel,
-      recipientId: event.recipientId || event.sourceId || '',
-      text: reply.answer,
-      replyToId: event.messageId || '',
+    let autoReplyStatus = 'sent';
+    let autoReplyError = '';
+
+    try {
+      await sendMetaTextMessage({
+        integration,
+        channel,
+        recipientId: event.recipientId || event.sourceId || '',
+        text: reply.answer,
+        replyToId: event.messageId || '',
+      });
+    } catch (error) {
+      autoReplyStatus = 'failed';
+      autoReplyError = error.message || 'Error enviando respuesta automática';
+      console.error('Error enviando respuesta automática Meta:', error);
+    }
+
+    emitMetaRealtimeEvent(app, tenantId, 'meta:reply-status', {
+      ...payload,
+      autoReplyStatus,
+      autoReplyError,
+      autoReplyAttempted: true,
     });
   }
 

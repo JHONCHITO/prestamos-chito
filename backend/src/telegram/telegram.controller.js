@@ -22,10 +22,10 @@ const telegramWebhook = async (req, res) => {
 
     if (update.message) {
       console.log('Procesando message', update.message.text);
-      await telegramService.handleMessage(update.message);
+      await telegramService.handleMessage(update.message, req.app);
     } else if (update.callback_query) {
       console.log('Procesando callback', update.callback_query.data);
-      await telegramService.handleCallbackQuery(update.callback_query);
+      await telegramService.handleCallbackQuery(update.callback_query, req.app);
     }
 
     return res.status(200).send('OK');

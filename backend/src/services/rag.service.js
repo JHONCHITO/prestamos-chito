@@ -2569,6 +2569,7 @@ async function listConversationThreads({
         followUpQuestions: Array.isArray(item.metadata?.followUpQuestions)
           ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
           : [],
+        conversationStatus: safeString(item.metadata?.conversationStatus || 'open'),
         createdAt: item.createdAt || null,
         updatedAt,
       });
@@ -2592,6 +2593,7 @@ async function listConversationThreads({
       existing.followUpQuestions = Array.isArray(item.metadata?.followUpQuestions)
         ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
         : existing.followUpQuestions;
+      existing.conversationStatus = safeString(item.metadata?.conversationStatus || existing.conversationStatus || 'open');
     }
   });
 
@@ -2668,6 +2670,7 @@ async function getConversationThread({
         followUpQuestions: Array.isArray(item.metadata?.followUpQuestions)
           ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
           : [],
+        conversationStatus: safeString(item.metadata?.conversationStatus || 'open'),
       };
     }
 
@@ -3321,6 +3324,7 @@ async function storeConversationMemory({
   memorySummary,
   sources = [],
   followUpQuestions = [],
+  conversationStatus = 'open',
 }) {
   const normalizedChannel = normalizeChannel(channel);
   const turnContent = truncateText(`Pregunta: ${question}\nRespuesta: ${answer}`, 2200);
@@ -3344,6 +3348,7 @@ async function storeConversationMemory({
       followUpQuestions,
       important,
       memoryType: 'conversation_turn',
+      conversationStatus: safeString(conversationStatus || 'open'),
     },
     embedding: turnEmbedding || undefined,
     contentHash: crypto.createHash('sha1').update(turnContent).digest('hex'),
@@ -3377,6 +3382,7 @@ async function storeConversationMemory({
       sourceCount: sources.length,
       followUpQuestions,
       conversationId: safeString(conversationId),
+      conversationStatus: safeString(conversationStatus || 'open'),
     },
     embedding: episodeEmbedding || undefined,
     contentHash: crypto.createHash('sha1').update(episodeContent).digest('hex'),
@@ -3408,6 +3414,7 @@ async function storeConversationMemory({
         followUpQuestions,
         memorySummary: memoryContent,
         conversationId: safeString(conversationId),
+        conversationStatus: safeString(conversationStatus || 'open'),
       },
       embedding: memoryEmbedding || undefined,
       contentHash: crypto.createHash('sha1').update(memoryContent).digest('hex'),
@@ -3525,10 +3532,14 @@ async function answerRagQuestion({
     'Los documentos cargados, incluyendo PDF, Word, imagen y texto, forman parte del contexto recuperado y puedes citarlos cuando sean relevantes.',
     'Si faltan datos, dilo claramente y pide el dato faltante.',
     'No inventes clientes, saldos, fechas ni estados.',
+    'No reveles carteras completas, rankings, mora general ni datos de otros clientes en consultas normales. Si la pregunta es de un prospecto o de alguien que pide un prestamo, responde solo con requisitos, pasos y orientacion general.',
+    'Si la consulta es para solicitar un prestamo, responde con informacion inteligente, breve y util: requisitos, pasos, condiciones generales y solo los datos indispensables que falten. Si necesitas hacer preguntas, pide solo nombre, cedula, celular, ciudad y monto aproximado si aplica. No hagas listas innecesarias ni expongas datos internos.',
     'Si la pregunta trata sobre un cliente o prestamo concreto, enfocate solo en ese caso.',
     'Si el usuario pide una preferencia duradera o una nota importante, resume esa informacion en memory_summary.',
+    'Agrega "should_close_conversation": true cuando la respuesta ya quede resuelta y no haga falta seguir el hilo; usa false solo si de verdad debes dejar el caso abierto.',
+    'No escribas la frase de cierre dentro de answer; el sistema la agregara cuando corresponda.',
     'Devuelve un JSON valido con esta forma exacta:',
-    '{ "answer": "texto para el usuario", "memory_summary": "nota corta o vacia", "follow_up_questions": ["..."], "used_context_ids": ["..."] }',
+    '{ "answer": "texto para el usuario", "memory_summary": "nota corta o vacia", "follow_up_questions": ["..."], "used_context_ids": ["..."], "should_close_conversation": true }',
     'El texto debe ser en espanol y profesional.',
   ].join(' ');
 
@@ -3586,6 +3597,11 @@ async function answerRagQuestion({
   const usedContextIds = Array.isArray(parsed.used_context_ids)
     ? parsed.used_context_ids.map((item) => safeString(item)).filter(Boolean).slice(0, 10)
     : context.sources.map((item) => item.id);
+  const shouldCloseConversation = parsed.should_close_conversation !== false;
+  const closingPrompt = '¿Hay algo más en lo que te pueda ayudar?';
+  const finalAnswer = shouldCloseConversation
+    ? `${answer.trim()}\n\n${closingPrompt}`.trim()
+    : answer;
 
   const memoryResult = await storeConversationMemory({
     tenantId: context.tenantId || null,
@@ -3593,19 +3609,20 @@ async function answerRagQuestion({
     userName,
     role,
     question: cleanQuestion,
-    answer,
+    answer: finalAnswer,
     conversationId: effectiveConversationId,
     channel: normalizedChannel,
     memorySummary,
     sources: context.sources,
     followUpQuestions,
+    conversationStatus: shouldCloseConversation ? 'closed' : 'open',
   }).catch(() => ({
     memoryStored: false,
     conversationStored: false,
   }));
 
   return {
-    answer,
+    answer: finalAnswer,
     memorySummary,
     followUpQuestions,
     usedContextIds,
@@ -3615,6 +3632,7 @@ async function answerRagQuestion({
     memoryStored: memoryResult.memoryStored,
     conversationStored: memoryResult.conversationStored,
     conversationId: effectiveConversationId,
+    conversationStatus: shouldCloseConversation ? 'closed' : 'open',
     fallbackMode: !openai,
   };
 }

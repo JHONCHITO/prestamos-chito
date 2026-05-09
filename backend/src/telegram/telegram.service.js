@@ -34,6 +34,26 @@ const clearAutenticacion = (chatId) => {
 
 const getAutenticacion = (chatId) => autenticaciones[chatId] || null;
 
+const normalizeTenantId = (value = '') => String(value || '').trim().toLowerCase();
+
+const emitTelegramRealtimeEvent = (app, tenantId, eventName, payload = {}) => {
+  const io = app?.get?.('io');
+  if (!io || !eventName) return;
+
+  const rooms = new Set();
+  const cleanTenantId = normalizeTenantId(tenantId);
+
+  if (cleanTenantId) {
+    rooms.add(`tenant-${cleanTenantId}`);
+  }
+
+  rooms.add('superadmin-room');
+
+  for (const room of rooms) {
+    io.to(room).emit(eventName, payload);
+  }
+};
+
 const ZONA_HORARIA = 'America/Bogota';
 const DIA_MS = 24 * 60 * 60 * 1000;
 
@@ -982,7 +1002,7 @@ const confirmarPago = async (chatId, cobrador) => {
 // ════════════════════════════════════════════════════════════════════
 // HANDLERS PRINCIPALES resive el mensaje entrante y las aciones del menu 
 // ════════════════════════════════════════════════════════════════════
-const handleMessage = async (message) => {
+const handleMessage = async (message, app = null) => {
   try {
     const chatId = message?.chat?.id;
     const telegramUserId = message?.from?.id;
@@ -1135,9 +1155,9 @@ const handleMessage = async (message) => {
         }
       }
 
-      datos += '\nReglas: responde solo lo que el usuario preguntó. Si pregunta por un cliente, no hagas un resumen de toda la cartera. Si falta una fecha, dilo y explica de dónde sale el dato.';
+      datos += '\nReglas: responde solo lo que el usuario preguntó. Si pregunta por un cliente, no hagas un resumen de toda la cartera. No reveles datos de otros clientes, rankings ni mora general. Si falta una fecha, dilo y explica de dónde sale el dato.';
 
-      const respuesta = await responderIA_RAG(text, datos, {
+      const ragResult = await responderIA_RAG(text, datos, {
         tenantId: cobrador.tenantId,
         userId: cobrador._id?.toString?.() || String(cobrador._id),
         userName: cobrador.nombre || '',
@@ -1145,7 +1165,20 @@ const handleMessage = async (message) => {
         conversationId: String(chatId),
         channel: 'telegram',
       });
+      const respuesta = ragResult?.answer || 'â’ Error con la IA';
       await sendMessage(chatId, respuesta);
+
+      emitTelegramRealtimeEvent(app, cobrador.tenantId, 'rag:conversation-updated', {
+        tenantId: normalizeTenantId(cobrador.tenantId),
+        conversationId: String(chatId),
+        channel: 'telegram',
+        userName: cobrador.nombre || '',
+        question: text,
+        answer: respuesta,
+        conversationStatus: ragResult?.conversationStatus || 'open',
+        sourceId: String(telegramUserId || ''),
+        updatedAt: new Date().toISOString(),
+      });
       return;
     } catch (error) {
       console.error('❌ ERROR IA:', error.message);
@@ -1362,7 +1395,7 @@ async function responderIA_RAG(pregunta, datos = "", contexto = {}) {
       manualContext: datos,
     });
 
-    return result.answer;
+    return result;
   } catch (error) {
     console.error("Error IA RAG:", error.message);
     return "âŒ Error con la IA";

@@ -72,6 +72,52 @@ const Notificaciones = () => {
       } catch (e) {}
     });
 
+    const handleMetaConversation = (data = {}) => {
+      const channel = String(data.channel || 'web').trim().toLowerCase();
+      const channelLabel = {
+        whatsapp: 'WhatsApp',
+        instagram: 'Instagram',
+        facebook: 'Facebook',
+        web: 'Web',
+        telegram: 'Telegram',
+      }[channel] || channel || 'Canal';
+      const userLabel = String(data.userName || data.sourceId || data.recipientId || 'Nuevo mensaje').trim();
+      const preview = String(data.question || data.preview || data.answer || '').trim();
+
+      if (data.autoReplyStatus === 'failed') {
+        message.warning({
+          content: `La IA no pudo responder por ${channelLabel}. ${String(data.autoReplyError || '').trim()}`,
+          duration: 8,
+          icon: <WarningOutlined />,
+          style: { marginTop: '20vh' }
+        });
+      } else if (data.autoReplyStatus === 'sent') {
+        message.success({
+          content: `La IA respondió automáticamente por ${channelLabel}${userLabel ? ` para ${userLabel}` : ''}.`,
+          duration: 5,
+          icon: <CheckCircleOutlined />,
+          style: { marginTop: '20vh' }
+        });
+      } else {
+        message.info({
+          content: `Nuevo mensaje por ${channelLabel}${userLabel ? ` de ${userLabel}` : ''}${preview ? `: ${preview.slice(0, 90)}` : ''}`,
+          duration: 6,
+          icon: <MailOutlined />,
+          style: { marginTop: '20vh' }
+        });
+      }
+
+      if (document.hidden) {
+        document.title = `📩 Nuevo mensaje - ${channelLabel}`;
+        setTimeout(() => {
+          document.title = 'Panel Administrador - Gota a Gota';
+        }, 8000);
+      }
+    };
+
+    newSocket.on('rag:conversation-updated', handleMetaConversation);
+    newSocket.on('meta:reply-status', handleMetaConversation);
+
     newSocket.on('disconnect', () => {
       console.log('🔌 Desconectado del servidor de notificaciones');
     });
