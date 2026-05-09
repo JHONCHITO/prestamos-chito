@@ -533,11 +533,13 @@ async function upsertIntegrationConfig({
     updatedBy: safeString(userName || userId || ''),
   });
 
+  const { tenantId: _ignoredTenantId, ...dataToSet } = nextData;
+
   const updated = await MetaIntegration.findOneAndUpdate(
     { tenantId: cleanTenantId },
     {
       $set: {
-        ...nextData,
+        ...dataToSet,
       },
       $setOnInsert: {
         tenantId: cleanTenantId,

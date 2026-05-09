@@ -20,6 +20,12 @@ import EspacioIA from './pages/EspacioIA';
 import BandejaConversaciones from './pages/BandejaConversaciones';
 import CanalesMeta from './pages/CanalesMeta';
 import CobradorDetalle from './pages/CobradorDetalle';
+import {
+  PrivacyPolicyPage,
+  TermsOfServicePage,
+  DataDeletionPage,
+  AuthorizationCancelledPage,
+} from './pages/LegalPages';
 
 message.config({
   top: 100,
@@ -84,33 +90,47 @@ function App() {
     return <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>Cargando...</div>;
   }
 
-  if (!user) return <Login onLogin={handleLogin} />;
-
   return (
     <ConfigProvider locale={esES}>
       <BrowserRouter>
-        <Layout user={user} onLogout={handleLogout}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/prestamos" element={<Prestamos />} />
-            <Route path="/prestamos/nuevo" element={<Prestamos />} />
-            <Route path="/prestamos/:id" element={<PrestamoDetalle />} />
-            <Route path="/clientes" element={<Clientes />} />
-            <Route path="/clientes/:id" element={<ClienteDetalle />} />
-            <Route path="/cobradores" element={<Cobradores />} />
-            <Route path="/cobradores/:id" element={<CobradorDetalle />} />
-            <Route path="/cartera" element={<Cartera />} />
-            <Route path="/calendario" element={<Calendario />} />
-            <Route path="/reportes" element={<Reportes />} />
-            <Route path="/canales-meta" element={<CanalesMeta />} />
-            <Route path="/asistente" element={<EspacioIA />} />
-            <Route path="/bandeja" element={<BandejaConversaciones />} />
-            <Route path="/configuracion" element={<Configuracion />} />
-            <Route path="/perfil" element={<Perfil />} />
-            <Route path="*" element={<Navigate to="/dashboard" />} />
-          </Routes>
-        </Layout>
+        <Routes>
+          <Route path="/login" element={<Login onLogin={handleLogin} />} />
+          <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+          <Route path="/terms" element={<TermsOfServicePage />} />
+          <Route path="/data-deletion" element={<DataDeletionPage />} />
+          <Route path="/auth-cancelled" element={<AuthorizationCancelledPage />} />
+          <Route
+            path="/*"
+            element={
+              user ? (
+                <Layout user={user} onLogout={handleLogout}>
+                  <Routes>
+                    <Route path="/" element={<Navigate to="/dashboard" />} />
+                    <Route path="/dashboard" element={<Dashboard />} />
+                    <Route path="/prestamos" element={<Prestamos />} />
+                    <Route path="/prestamos/nuevo" element={<Prestamos />} />
+                    <Route path="/prestamos/:id" element={<PrestamoDetalle />} />
+                    <Route path="/clientes" element={<Clientes />} />
+                    <Route path="/clientes/:id" element={<ClienteDetalle />} />
+                    <Route path="/cobradores" element={<Cobradores />} />
+                    <Route path="/cobradores/:id" element={<CobradorDetalle />} />
+                    <Route path="/cartera" element={<Cartera />} />
+                    <Route path="/calendario" element={<Calendario />} />
+                    <Route path="/reportes" element={<Reportes />} />
+                    <Route path="/canales-meta" element={<CanalesMeta />} />
+                    <Route path="/asistente" element={<EspacioIA />} />
+                    <Route path="/bandeja" element={<BandejaConversaciones />} />
+                    <Route path="/configuracion" element={<Configuracion />} />
+                    <Route path="/perfil" element={<Perfil />} />
+                    <Route path="*" element={<Navigate to="/dashboard" />} />
+                  </Routes>
+                </Layout>
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
+        </Routes>
       </BrowserRouter>
     </ConfigProvider>
   );
