@@ -48,6 +48,17 @@ function normalizeRecipientPhone(value = '') {
   return digits;
 }
 
+function formatMetaApiError(error, fallbackMessage = 'Error enviando mensaje Meta') {
+  const metaError = error?.response?.data?.error || error?.response?.data || null;
+  const metaMessage = safeString(metaError?.message || metaError?.error_user_msg || metaError?.error_msg || '');
+  const metaType = safeString(metaError?.type || '');
+  const metaCode = metaError?.code !== undefined ? `code=${metaError.code}` : '';
+  const metaSubcode = metaError?.error_subcode !== undefined ? `subcode=${metaError.error_subcode}` : '';
+  const metaStatus = error?.response?.status ? `status=${error.response.status}` : '';
+  const parts = [fallbackMessage, metaStatus, metaCode, metaSubcode, metaType, metaMessage].filter(Boolean);
+  return parts.join(' | ');
+}
+
 function normalizeMetaChannel(channel = '') {
   const normalized = normalizeChannel(channel);
   if (normalized === 'web') {
@@ -1201,17 +1212,21 @@ async function sendMetaTextMessage({
     };
   }
 
-  const response = await axios.post(url, payload, {
-    params: {
-      access_token: accessToken,
-    },
-    timeout: 30000,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
+  try {
+    const response = await axios.post(url, payload, {
+      params: {
+        access_token: accessToken,
+      },
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
 
-  return response.data;
+    return response.data;
+  } catch (error) {
+    throw new Error(formatMetaApiError(error, `Error enviando respuesta ${normalizedChannel}`));
+  }
 }
 
 async function sendMetaTemplateMessage({
@@ -1270,17 +1285,21 @@ async function sendMetaTemplateMessage({
     ];
   }
 
-  const response = await axios.post(url, payload, {
-    params: {
-      access_token: accessToken,
-    },
-    timeout: 30000,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
+  try {
+    const response = await axios.post(url, payload, {
+      params: {
+        access_token: accessToken,
+      },
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
 
-  return response.data;
+    return response.data;
+  } catch (error) {
+    throw new Error(formatMetaApiError(error, 'Error enviando plantilla de WhatsApp'));
+  }
 }
 
 function buildCampaignStats(campaign) {
