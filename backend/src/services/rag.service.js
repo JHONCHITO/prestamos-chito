@@ -882,12 +882,25 @@ function parseConversationTurn(content = '') {
   };
 }
 
-function resolveConversationTenantId({ tenantId, targetTenantId, role }) {
-  if (role === 'superadmin' || role === 'superadministrador') {
-    return safeString(targetTenantId).toLowerCase() || null;
+function normalizeMeaningfulTenantId(value = '') {
+  const normalized = safeString(value).trim().toLowerCase();
+  if (!normalized) {
+    return '';
   }
 
-  return safeString(tenantId).toLowerCase() || null;
+  if (['system', 'global', 'null', 'undefined'].includes(normalized)) {
+    return '';
+  }
+
+  return normalized;
+}
+
+function resolveConversationTenantId({ tenantId, targetTenantId, role }) {
+  if (role === 'superadmin' || role === 'superadministrador') {
+    return normalizeMeaningfulTenantId(targetTenantId) || null;
+  }
+
+  return normalizeMeaningfulTenantId(tenantId) || null;
 }
 
 function isImageMimeType(mimeType = '', fileName = '') {
@@ -999,11 +1012,11 @@ function splitTextIntoChunks(text, maxChars = 1600, overlapChars = 220) {
 
 function resolveKnowledgeTenantId({ tenantId, targetTenantId, role }) {
   if (role === 'superadmin' || role === 'superadministrador') {
-    const requested = safeString(targetTenantId).toLowerCase();
+    const requested = normalizeMeaningfulTenantId(targetTenantId);
     return requested || null;
   }
 
-  return safeString(tenantId).toLowerCase() || null;
+  return normalizeMeaningfulTenantId(tenantId) || null;
 }
 
 async function extractTextFromImageBuffer({ buffer, mimeType = 'image/png', fileName = '' }) {
@@ -1442,10 +1455,11 @@ function memoryQueryBase({ tenantId, role, userId }) {
   };
 
   const scope = [];
+  const tenantScope = normalizeMeaningfulTenantId(tenantId);
 
-  if (tenantId) {
-    scope.push({ tenantId });
-  } else if (role === 'superadmin' || role === 'superadministrador') {
+  if (tenantScope) {
+    scope.push({ tenantId: tenantScope });
+  } else if (role !== 'superadmin' && role !== 'superadministrador') {
     scope.push({ tenantId: null });
   }
 
@@ -1536,14 +1550,15 @@ function knowledgeQueryBase({ tenantId, role }) {
   };
 
   const scope = [];
+  const tenantScope = normalizeMeaningfulTenantId(tenantId);
 
-  if (tenantId) {
-    scope.push({ tenantId });
+  if (tenantScope) {
+    scope.push({ tenantId: tenantScope });
     scope.push({ tenantId: null });
-  } else if (role === 'superadmin' || role === 'superadministrador') {
+  } else if (role !== 'superadmin' && role !== 'superadministrador') {
     scope.push({ tenantId: null });
   } else {
-    scope.push({ tenantId: null });
+    // Superadmin sin oficina seleccionada: deja la búsqueda abierta a todos los documentos.
   }
 
   if (scope.length) {
@@ -1651,12 +1666,14 @@ async function findTenantMatch(question) {
 }
 
 async function resolveScopeTenantId({ tenantId, targetTenantId, role, question }) {
-  if (targetTenantId) {
-    return safeString(targetTenantId).toLowerCase();
+  const requestedTenant = normalizeMeaningfulTenantId(targetTenantId);
+  if (requestedTenant) {
+    return requestedTenant;
   }
 
-  if (tenantId) {
-    return safeString(tenantId).toLowerCase();
+  const currentTenant = normalizeMeaningfulTenantId(tenantId);
+  if (currentTenant) {
+    return currentTenant;
   }
 
   if (role === 'superadmin' || role === 'superadministrador') {
@@ -1670,7 +1687,7 @@ async function resolveScopeTenantId({ tenantId, targetTenantId, role, question }
 }
 
 async function buildTenantSnapshot({ tenantId, role, userId }) {
-  const tenantScope = safeString(tenantId).toLowerCase() || null;
+  const tenantScope = normalizeMeaningfulTenantId(tenantId) || null;
   const isSuperAdmin = role === 'superadmin' || role === 'superadministrador';
   const filter = {};
 
@@ -1967,7 +1984,10 @@ async function buildGlobalSnapshot() {
 }
 
 async function buildClientContext({ question, tenantId, role, userId }) {
-  if (!tenantId) {
+  const tenantScope = normalizeMeaningfulTenantId(tenantId);
+  const isSuperAdmin = role === 'superadmin' || role === 'superadministrador';
+
+  if (!tenantScope && !isSuperAdmin) {
     return {
       text: '',
       sources: [],
@@ -1991,13 +2011,13 @@ async function buildClientContext({ question, tenantId, role, userId }) {
     };
   }
 
-  const clientFilter = { tenantId };
-  if (role === 'cobrador' && userId) {
+  const clientFilter = tenantScope ? { tenantId: tenantScope } : {};
+  if (role === 'cobrador' && userId && tenantScope) {
     clientFilter.cobrador = userId;
   }
 
-  const vectorClientFilter = { tenantId };
-  if (role === 'cobrador' && userId) {
+  const vectorClientFilter = tenantScope ? { tenantId: tenantScope } : {};
+  if (role === 'cobrador' && userId && tenantScope) {
     const cobradorObjectId = toObjectId(userId);
     if (cobradorObjectId) {
       vectorClientFilter.cobrador = cobradorObjectId;
@@ -2067,11 +2087,14 @@ async function buildClientContext({ question, tenantId, role, userId }) {
 
   const clientIds = clients.map((client) => client._id);
   const loanFilter = {
-    tenantId,
     cliente: { $in: clientIds },
   };
 
-  if (role === 'cobrador' && userId) {
+  if (tenantScope) {
+    loanFilter.tenantId = tenantScope;
+  }
+
+  if (role === 'cobrador' && userId && tenantScope) {
     loanFilter.cobrador = userId;
   }
 
@@ -2082,10 +2105,15 @@ async function buildClientContext({ question, tenantId, role, userId }) {
     .limit(15)
     .lean();
 
-  const payments = await Pago.find({
-    tenantId,
+  const paymentQuery = {
     clienteId: { $in: clientIds },
-  })
+  };
+
+  if (tenantScope) {
+    paymentQuery.tenantId = tenantScope;
+  }
+
+  const payments = await Pago.find(paymentQuery)
     .sort({ fecha: -1 })
     .limit(10)
     .lean();
@@ -2573,11 +2601,12 @@ async function listConversationThreads({
   items.forEach((item) => {
     if (!item.conversationId) return;
 
+    const itemTenantId = normalizeMeaningfulTenantId(item.tenantId) || null;
     const parsed = parseConversationTurn(item.content);
     const question = safeString(parsed.question || item.title || '');
     const answer = safeString(parsed.answer || item.summary || '');
     const preview = truncateText(question || answer || item.summary || item.content, 180);
-    const scopeKey = `${String(item.tenantId || 'global').toLowerCase()}:${String(item.conversationId)}`;
+    const scopeKey = `${String(itemTenantId || 'global').toLowerCase()}:${String(item.conversationId)}`;
     const existing = threads.get(scopeKey);
     const updatedAt = item.updatedAt || item.createdAt || null;
 
@@ -2600,7 +2629,7 @@ async function listConversationThreads({
     if (!existing) {
       threads.set(scopeKey, {
         conversationId: String(item.conversationId),
-        tenantId: item.tenantId || null,
+        tenantId: itemTenantId,
         userId: item.userId || null,
         userName: safeString(item.userName),
         role: safeString(item.role),
@@ -2641,6 +2670,7 @@ async function listConversationThreads({
         ? item.metadata.followUpQuestions.filter(Boolean).slice(0, 5)
         : existing.followUpQuestions;
       existing.conversationStatus = safeString(item.metadata?.conversationStatus || existing.conversationStatus || 'open');
+      existing.tenantId = itemTenantId;
     }
   });
 
@@ -2697,6 +2727,7 @@ async function getConversationThread({
   let thread = null;
 
   items.forEach((item, index) => {
+    const itemTenantId = normalizeMeaningfulTenantId(item.tenantId) || null;
     const parsed = parseConversationTurn(item.content);
     const question = safeString(parsed.question || item.title || '');
     const answer = safeString(parsed.answer || item.summary || '');
@@ -2704,7 +2735,7 @@ async function getConversationThread({
     if (!thread) {
       thread = {
         conversationId: cleanConversationId,
-        tenantId: item.tenantId || null,
+        tenantId: itemTenantId,
         userId: item.userId || null,
         userName: safeString(item.userName),
         role: safeString(item.role),
@@ -3577,6 +3608,7 @@ async function answerRagQuestion({
     'Eres el asistente RAG profesional de Prestamos Chito.',
     'Respondes solo con informacion respaldada por el contexto recuperado o por memoria relevante.',
     'Los documentos cargados, incluyendo PDF, Word, imagen y texto, forman parte del contexto recuperado y puedes citarlos cuando sean relevantes.',
+    'Si eres superadmin y no hay una oficina seleccionada, puedes usar el contexto global y buscar clientes en todo el sistema para responder con precision.',
     'Si faltan datos, dilo claramente y pide el dato faltante.',
     'No inventes clientes, saldos, fechas ni estados.',
     'No reveles carteras completas, rankings, mora general ni datos de otros clientes en consultas normales. Si la pregunta es de un prospecto o de alguien que pide un prestamo, responde solo con requisitos, pasos y orientacion general.',
