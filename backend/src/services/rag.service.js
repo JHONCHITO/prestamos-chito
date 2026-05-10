@@ -1769,16 +1769,17 @@ async function buildTenantSnapshot({ tenantId, role, userId }) {
 
   const topClients = [...balanceByClient.values()]
     .sort((a, b) => b.balance - a.balance)
-    .slice(0, 5);
+    .slice(0, 10);
 
   const recentPayments = payments.slice(0, 8);
   const recentLoans = [...loans]
     .sort((a, b) => calculateBalance(b) - calculateBalance(a))
-    .slice(0, 5);
+    .slice(0, 8);
 
   const title = tenant?.nombre || tenantScope || 'Global';
   const sectionText = [
     `Resumen operativo para ${title}.`,
+    `Fecha de corte: ${formatDate(new Date())}.`,
     tenantScope ? `Tenant ID: ${tenantScope}` : '',
     officeContacts ? `Telefonos de contacto de la oficina: ${officeContacts}.` : '',
     `Clientes activos: ${activeClients} de ${clientCount}.`,
@@ -1873,22 +1874,30 @@ async function buildGlobalSnapshot() {
     tenantCount,
     activeTenantCount,
     clientCount,
+    activeClientCount,
     loanCount,
     activeLoanCount,
     paidLoanCount,
     overdueLoanCount,
     recentTenants,
     activeTenants,
+    allLoans,
   ] = await Promise.all([
     Tenant.countDocuments(),
     Tenant.countDocuments({ estado: true }),
     Cliente.countDocuments(),
+    Cliente.countDocuments({ estado: { $ne: 'inactivo' } }),
     Prestamo.countDocuments(),
     Prestamo.countDocuments({ estado: 'activo' }),
     Prestamo.countDocuments({ estado: 'pagado' }),
     Prestamo.countDocuments({ estado: 'vencido' }),
     Tenant.find().sort({ fechaCreacion: -1 }).limit(8).lean(),
     Tenant.find({ estado: true }).select('nombre tenantId estado fechaCreacion').lean(),
+    Prestamo.find()
+      .populate('cliente', 'nombre cedula')
+      .populate('cobrador', 'nombre cedula')
+      .sort({ updatedAt: -1 })
+      .lean(),
   ]);
 
   const aggregate = (await Prestamo.aggregate([
@@ -1922,11 +1931,38 @@ async function buildGlobalSnapshot() {
     }
   }
 
+  const balanceByClient = new Map();
+  allLoans.forEach((loan) => {
+    const clientKey = String(loan.cliente?._id || loan.cliente || '');
+    if (!clientKey) return;
+
+    const current = balanceByClient.get(clientKey) || {
+      cliente: loan.cliente || null,
+      balance: 0,
+      loans: 0,
+    };
+
+    current.balance += calculateBalance(loan);
+    current.loans += 1;
+    balanceByClient.set(clientKey, current);
+  });
+
+  const globalTopClients = [...balanceByClient.values()]
+    .sort((a, b) => b.balance - a.balance)
+    .slice(0, 10);
+
+  const globalOverdueLoans = allLoans
+    .filter((loan) => loan.estado !== 'pagado' && calculateOverdueDays(loan) > 0)
+    .sort((a, b) => calculateBalance(b) - calculateBalance(a))
+    .slice(0, 10);
+
   const text = [
     'Resumen global del sistema.',
+    `Fecha de corte: ${formatDate(new Date())}.`,
     `Oficinas registradas: ${tenantCount}.`,
     `Oficinas activas: ${activeTenantCount}.`,
     `Clientes totales: ${clientCount}.`,
+    `Clientes activos: ${activeClientCount}.`,
     `Prestamos totales: ${loanCount}.`,
     `Prestamos activos: ${activeLoanCount}.`,
     `Prestamos pagados: ${paidLoanCount}.`,
@@ -1940,6 +1976,19 @@ async function buildGlobalSnapshot() {
           .map((item, index) => `${index + 1}. ${item.tenant.nombre} - ${item.daysLate} dias tarde`)
           .join(' | ')}`
       : 'No se detectan oficinas con atraso en el barrido reciente.',
+    '',
+    globalTopClients.length
+      ? `Clientes con mayor saldo global: ${globalTopClients
+          .map((item, index) => `${index + 1}. ${item.cliente?.nombre || 'Sin nombre'} - ${formatCurrency(item.balance)} en ${item.loans} creditos`)
+          .join(' | ')}`
+      : 'No se detectan clientes con saldo relevante en el barrido global.',
+    '',
+    globalOverdueLoans.length
+      ? `Prestamos con atraso real mas relevantes: ${globalOverdueLoans
+          .slice(0, 5)
+          .map((loan, index) => `${index + 1}. ${loan.cliente?.nombre || 'Sin cliente'} - ${formatCurrency(calculateBalance(loan))} - ${calculateOverdueDays(loan)} dias de atraso`)
+          .join(' | ')}`
+      : 'No se detectan prestamos con atraso real en el barrido global.',
   ]
     .filter(Boolean)
     .join('\n');
@@ -1953,6 +2002,18 @@ async function buildGlobalSnapshot() {
       score: 1,
       importance: 1,
     }),
+    globalTopClients.length
+      ? buildSource({
+          id: 'global-top-clients',
+          title: 'Clientes con mayor saldo global',
+          type: 'summary',
+          snippet: globalTopClients
+            .map((item, index) => `${index + 1}. ${item.cliente?.nombre || 'Sin nombre'} - ${formatCurrency(item.balance)} en ${item.loans} creditos`)
+            .join(' | '),
+          score: 1,
+          importance: 1,
+        })
+      : null,
     ...recentTenants.map((tenant) =>
       buildSource({
         id: `tenant:${tenant.tenantId}`,
@@ -1962,7 +2023,7 @@ async function buildGlobalSnapshot() {
         importance: 0.7,
       }),
     ),
-  ];
+  ].filter(Boolean);
 
   return {
     title: 'Global',
@@ -1972,6 +2033,7 @@ async function buildGlobalSnapshot() {
       tenantCount,
       activeTenantCount,
       clientCount,
+      activeClientCount,
       loanCount,
       activeLoanCount,
       paidLoanCount,
@@ -3346,18 +3408,20 @@ async function buildOperationalContext({ question, tenantId, targetTenantId, rol
     sources.push(...clientContext.sources);
   }
 
-  const memoryContext = await buildMemoryContext({
-    question,
-    tenantId: resolvedTenantId,
-    userId,
-    role,
-    conversationId,
-    channel,
-  });
+  if (shouldIncludeMemoryContext(question)) {
+    const memoryContext = await buildMemoryContext({
+      question,
+      tenantId: resolvedTenantId,
+      userId,
+      role,
+      conversationId,
+      channel,
+    });
 
-  if (memoryContext.text) {
-    sections.push(`### Memoria relevante\n${memoryContext.text}`);
-    sources.push(...memoryContext.sources);
+    if (memoryContext.text) {
+      sections.push(`### Memoria relevante\n${memoryContext.text}`);
+      sources.push(...memoryContext.sources);
+    }
   }
 
   if (manualContext && safeString(manualContext)) {
@@ -3388,6 +3452,33 @@ function shouldPersistMemory(question, answer, memorySummary) {
   if (safeString(memorySummary)) return true;
   const cues = /recuerda|prefiero|siempre|nunca|ten en cuenta|a partir de ahora|guarda|memoria|nota|anota/i;
   return cues.test(question) || cues.test(answer);
+}
+
+function isLiveOperationalQuestion(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return /(\bcu[aá]nt[oa]s?\b|\bqu[ií]en\b|\bsaldo\b|\bdebe\b|\badeuda\b|\bmora\b|\batraso\b|\bprestamo\b|\bpr[eé]stamo\b|\bcliente\b|\bclientes\b|\bcobrador\b|\bcobradores\b|\btelefono\b|\btel[eé]fono\b|\bnumero\b|\bn[uú]mero\b|\bcontacto\b|\bestado\b|\bvigente\b|\bpagado\b|\bvencid[oa]s?\b)/i.test(normalized);
+}
+
+function shouldIncludeMemoryContext(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  const memoryCues = /recuerd|memoria|te dije|te coment|como te dije|como te comente|antes|anterior|seguimiento|retomar|continuar/i.test(normalized);
+  if (memoryCues) {
+    return true;
+  }
+
+  if (isLiveOperationalQuestion(normalized)) {
+    return false;
+  }
+
+  return true;
 }
 
 async function storeConversationMemory({
@@ -3609,6 +3700,7 @@ async function answerRagQuestion({
     'Respondes solo con informacion respaldada por el contexto recuperado o por memoria relevante.',
     'Los documentos cargados, incluyendo PDF, Word, imagen y texto, forman parte del contexto recuperado y puedes citarlos cuando sean relevantes.',
     'Si eres superadmin y no hay una oficina seleccionada, puedes usar el contexto global y buscar clientes en todo el sistema para responder con precision.',
+    'Para clientes, saldos, atrasos, prestamos, conteos y estado de oficina, prioriza siempre los datos vivos del contexto operativo sobre la memoria historica. Si memoria y contexto vivo contradicen, ignora la memoria.',
     'Si faltan datos, dilo claramente y pide el dato faltante.',
     'No inventes clientes, saldos, fechas ni estados.',
     'No reveles carteras completas, rankings, mora general ni datos de otros clientes en consultas normales. Si la pregunta es de un prospecto o de alguien que pide un prestamo, responde solo con requisitos, pasos y orientacion general.',
