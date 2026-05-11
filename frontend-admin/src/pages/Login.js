@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { authAPI } from '../services/api';
 
 const styleTag = `
@@ -133,6 +134,7 @@ export default function Login({ onLogin }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const navigate = useNavigate();
 
   const handleSubmit = async () => {
     if (!email || !password) { setError('Complete todos los campos'); return; }
@@ -152,6 +154,7 @@ export default function Login({ onLogin }) {
       }
 
       onLogin(userData, token);
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(err.response?.data?.error || 'Error al iniciar sesión');
     } finally { setLoading(false); }

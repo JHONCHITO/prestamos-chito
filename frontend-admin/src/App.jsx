@@ -94,7 +94,10 @@ function App() {
     <ConfigProvider locale={esES}>
       <BrowserRouter>
         <Routes>
-          <Route path="/login" element={<Login onLogin={handleLogin} />} />
+          <Route
+            path="/login"
+            element={user ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLogin} />}
+          />
           <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
           <Route path="/terms" element={<TermsOfServicePage />} />
           <Route path="/data-deletion" element={<DataDeletionPage />} />
