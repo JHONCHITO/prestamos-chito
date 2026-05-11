@@ -544,7 +544,11 @@ async function upsertIntegrationConfig({
     updatedBy: safeString(userName || userId || ''),
   });
 
-  const { tenantId: _ignoredTenantId, ...dataToSet } = nextData;
+  const {
+    tenantId: _ignoredTenantId,
+    createdBy: _ignoredCreatedBy,
+    ...dataToSet
+  } = nextData;
 
   const updated = await MetaIntegration.findOneAndUpdate(
     { tenantId: cleanTenantId },
