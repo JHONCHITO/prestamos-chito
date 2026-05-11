@@ -559,6 +559,168 @@ function extractTokens(question) {
     .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
 }
 
+function isClientListingQuestion(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return /(\bmis\b.*\bclientes\b|\bclientes\b.*\b(mostrar|lista|listar|ver|todos|todas|registrados|activos|tenemos|hay)\b|\bcuantos\b.*\bclientes\b|\bque clientes\b)/i.test(normalized);
+}
+
+function isLoanListingQuestion(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return /(\bmis\b.*\bprestamos\b|\bprestamos\b.*\b(mostrar|lista|listar|ver|todos|todas|registrados|activos|tenemos|hay)\b|\bcuantos\b.*\bprestamos\b|\bque prestamos\b|\bcreditos\b)/i.test(normalized);
+}
+
+function isTopDebtorQuestion(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return /(\bquien\b.*\bdebe\b.*\bmas\b|\bquien\b.*\bmas\b.*\bdebe\b|\bmayor saldo\b|\bcliente\b.*\bque\b.*\bdebe\b.*\bmas\b|\btop\b.*\bcartera\b|\bmas me debe\b)/i.test(normalized);
+}
+
+function isOfficeContactQuestion(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return /(\btelefono\b|\btel[eé]fono\b|\bnumero\b.*\bcontacto\b|\bcomo llamo\b|\bllamar\b.*\boficina\b|\bcontacto\b.*\boficina\b)/i.test(normalized);
+}
+
+function isLiveOperationalQuestion(question = '') {
+  const normalized = normalizeText(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return /(\bcu[aá]nt[oa]s?\b|\bqu[ií]en\b|\bsaldo\b|\bdebe\b|\badeuda\b|\bmora\b|\batraso\b|\bprestamo\b|\bpr[eé]stamo\b|\bcliente\b|\bclientes\b|\bcobrador\b|\bcobradores\b|\btelefono\b|\btel[eé]fono\b|\bnumero\b|\bn[uú]mero\b|\bcontacto\b|\bestado\b|\bvigente\b|\bpagado\b|\bvencid[oa]s?\b)/i.test(normalized);
+}
+
+function extractLineAfterLabel(text = '', label = '') {
+  const normalizedLabel = safeString(label).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!normalizedLabel) {
+    return '';
+  }
+
+  const regex = new RegExp(`${normalizedLabel}\\s*:\\s*([^\\n]+)`, 'i');
+  const match = safeString(text).match(regex);
+  return safeString(match?.[1] || '');
+}
+
+function parseTopClientFromLine(line = '') {
+  const firstItem = safeString(line).split('|')[0].trim();
+  if (!firstItem) {
+    return null;
+  }
+
+  const cleaned = firstItem
+    .replace(/^Clientes con mayor saldo(?: global)?\s*:\s*/i, '')
+    .replace(/^Top de cartera en mora\s*:\s*/i, '')
+    .trim();
+
+  const match = cleaned.match(/^\d+\.\s*(.*?)\s*-\s*([^-]+?)(?:\s+en\s+\d+\s+creditos?)?$/i);
+  if (!match) {
+    return cleaned ? { name: cleaned, amount: '' } : null;
+  }
+
+  return {
+    name: safeString(match[1]),
+    amount: safeString(match[2]),
+  };
+}
+
+function buildDeterministicLiveAnswer({ question = '', contextText = '' }) {
+  const normalizedQuestion = normalizeText(question);
+  const normalizedContext = safeString(contextText);
+
+  if (!normalizedQuestion || !normalizedContext) {
+    return null;
+  }
+
+  if (isOfficeContactQuestion(normalizedQuestion)) {
+    const contacts = extractLineAfterLabel(normalizedContext, 'Telefonos de contacto de la oficina');
+    if (!contacts) {
+      return null;
+    }
+
+    return {
+      answer: `Los telefonos de contacto de la oficina son: ${contacts}.`,
+      memorySummary: '',
+      followUpQuestions: [],
+      shouldCloseConversation: true,
+    };
+  }
+
+  if (isTopDebtorQuestion(normalizedQuestion)) {
+    const topLine = extractLineAfterLabel(
+      normalizedContext,
+      normalizedContext.includes('Clientes con mayor saldo global')
+        ? 'Clientes con mayor saldo global'
+        : 'Clientes con mayor saldo',
+    ) || extractLineAfterLabel(normalizedContext, 'Top de cartera en mora');
+    const parsed = parseTopClientFromLine(topLine);
+    if (!parsed?.name) {
+      return null;
+    }
+
+    const suffix = parsed.amount ? ` con ${parsed.amount}` : '';
+    return {
+      answer: `El cliente con mayor saldo pendiente es ${parsed.name}${suffix}.`,
+      memorySummary: '',
+      followUpQuestions: [],
+      shouldCloseConversation: true,
+    };
+  }
+
+  if (/(\bcu[aá]nt[oa]s?\b.*\bclientes\b|\bclientes\b.*\bcu[aá]nt[oa]s?\b|\bnumero de clientes\b|\bclientes activos\b)/i.test(normalizedQuestion)) {
+    const activeClientsLine = extractLineAfterLabel(normalizedContext, 'Clientes activos');
+    if (!activeClientsLine) {
+      return null;
+    }
+
+    const match = activeClientsLine.match(/(\d+)\s+de\s+(\d+)/i);
+    if (!match) {
+      return null;
+    }
+
+    return {
+      answer: `Actualmente hay ${match[1]} clientes activos de ${match[2]} registrados.`,
+      memorySummary: '',
+      followUpQuestions: [],
+      shouldCloseConversation: true,
+    };
+  }
+
+  if (/(\bcu[aá]nt[oa]s?\b.*\bprestamos\b|\bprestamos\b.*\bcu[aá]nt[oa]s?\b|\bnumero de prestamos\b|\bprestamos activos\b)/i.test(normalizedQuestion)) {
+    const activeLoansLine = extractLineAfterLabel(normalizedContext, 'Prestamos activos');
+    if (!activeLoansLine) {
+      return null;
+    }
+
+    const match = activeLoansLine.match(/(\d+)\s+de\s+(\d+)/i);
+    if (!match) {
+      return null;
+    }
+
+    return {
+      answer: `Actualmente hay ${match[1]} prestamos activos de ${match[2]} registrados.`,
+      memorySummary: '',
+      followUpQuestions: [],
+      shouldCloseConversation: true,
+    };
+  }
+
+  return null;
+}
+
 function isNumericToken(token) {
   return /^\d{4,}$/.test(token);
 }
@@ -2048,6 +2210,8 @@ async function buildGlobalSnapshot() {
 async function buildClientContext({ question, tenantId, role, userId }) {
   const tenantScope = normalizeMeaningfulTenantId(tenantId);
   const isSuperAdmin = role === 'superadmin' || role === 'superadministrador';
+  const wantsClientList = isClientListingQuestion(question);
+  const wantsLoanList = isLoanListingQuestion(question);
 
   if (!tenantScope && !isSuperAdmin) {
     return {
@@ -2066,7 +2230,7 @@ async function buildClientContext({ question, tenantId, role, userId }) {
     }
   }
 
-  if (!tokens.length && !queryEmbedding) {
+  if (!tokens.length && !queryEmbedding && !wantsClientList && !wantsLoanList) {
     return {
       text: '',
       sources: [],
@@ -2083,6 +2247,126 @@ async function buildClientContext({ question, tenantId, role, userId }) {
     const cobradorObjectId = toObjectId(userId);
     if (cobradorObjectId) {
       vectorClientFilter.cobrador = cobradorObjectId;
+    }
+  }
+
+  if (wantsClientList || wantsLoanList) {
+    const clientLimit = wantsClientList ? 15 : 5;
+    const loanLimit = wantsLoanList ? 15 : 0;
+
+    const [directClients, directLoans] = await Promise.all([
+      wantsClientList
+        ? Cliente.find(clientFilter)
+            .populate('cobrador', 'nombre cedula')
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .limit(clientLimit)
+            .lean()
+        : Promise.resolve([]),
+      wantsLoanList
+        ? Prestamo.find({
+            ...(tenantScope ? { tenantId: tenantScope } : {}),
+            ...(role === 'cobrador' && userId && tenantScope ? { cobrador: userId } : {}),
+          })
+            .populate('cliente', 'nombre cedula')
+            .populate('cobrador', 'nombre cedula')
+            .sort({ updatedAt: -1, createdAt: -1 })
+            .limit(loanLimit)
+            .lean()
+        : Promise.resolve([]),
+    ]);
+
+    const sections = [];
+    const sources = [];
+
+    if (wantsClientList) {
+      const clientIds = directClients.map((client) => client._id);
+      const clientLoanDocs = clientIds.length
+        ? await Prestamo.find({
+          cliente: { $in: clientIds },
+          ...(tenantScope ? { tenantId: tenantScope } : {}),
+          ...(role === 'cobrador' && userId && tenantScope ? { cobrador: userId } : {}),
+        })
+          .populate('cliente', 'nombre cedula')
+          .populate('cobrador', 'nombre cedula')
+          .sort({ updatedAt: -1, createdAt: -1 })
+          .limit(40)
+          .lean()
+        : [];
+
+      if (directClients.length) {
+        const clientBlocks = directClients.map((client, index) => {
+          const relatedLoans = clientLoanDocs.filter((loan) => String(loan.cliente?._id || loan.cliente) === String(client._id));
+          const activeRelatedLoans = relatedLoans.filter((loan) => loan.estado !== 'pagado');
+          const balance = relatedLoans.reduce((sum, loan) => sum + calculateBalance(loan), 0);
+          return [
+            `${index + 1}. Cliente: ${client.nombre}`,
+            `   Cedula: ${client.cedula || 'sin dato'}`,
+            `   Estado: ${client.estado || 'sin dato'}`,
+            `   Tipo: ${client.tipoCliente || 'nuevo'}`,
+            `   Celular: ${client.celular || client.telefono || 'sin dato'}`,
+            `   Direccion: ${client.direccion || 'sin dato'}`,
+            `   Cobrador: ${client.cobrador?.nombre || 'sin asignar'}`,
+            `   Prestamos activos: ${activeRelatedLoans.length}`,
+            `   Saldo acumulado: ${formatCurrency(balance)}`,
+          ].join('\n');
+        });
+
+        sections.push([
+          'Listado de clientes solicitados.',
+          clientBlocks.join('\n\n'),
+        ].join('\n'));
+
+        sources.push(
+          ...directClients.map((client) =>
+            buildSource({
+              id: `client:${client._id}`,
+              title: client.nombre,
+              type: 'client',
+              snippet: `Cedula: ${client.cedula || 'sin dato'} | Estado: ${client.estado || 'sin dato'} | Direccion: ${client.direccion || 'sin dato'}`,
+              importance: 0.95,
+            }),
+          ),
+        );
+      }
+    }
+
+    if (wantsLoanList) {
+      if (directLoans.length) {
+        const loanBlocks = directLoans.map((loan, index) => [
+          `${index + 1}. Prestamo: ${loan.cliente?.nombre || 'Sin cliente'}`,
+          `   Estado: ${loan.estado || 'sin estado'}`,
+          `   Saldo: ${formatCurrency(calculateBalance(loan))}`,
+          `   Capital: ${formatCurrency(loan.capital)}`,
+          `   Total a pagar: ${formatCurrency(loan.totalAPagar)}`,
+          `   Pagado: ${formatCurrency(loan.totalPagado)}`,
+          `   Vence: ${formatDate(loan.fechaVencimiento)}`,
+          `   Cobrador: ${loan.cobrador?.nombre || 'sin asignar'}`,
+        ].join('\n'));
+
+        sections.push([
+          'Listado de prestamos solicitados.',
+          loanBlocks.join('\n\n'),
+        ].join('\n'));
+
+        sources.push(
+          ...directLoans.map((loan) =>
+            buildSource({
+              id: `loan:${loan._id}`,
+              title: `Prestamo ${loan.cliente?.nombre || loan._id}`,
+              type: 'loan',
+              snippet: `Saldo: ${formatCurrency(calculateBalance(loan))} | Estado: ${loan.estado || 'sin estado'} | Vence: ${formatDate(loan.fechaVencimiento)}`,
+              importance: 0.9,
+            }),
+          ),
+        );
+      }
+    }
+
+    if (sections.length) {
+      return {
+        text: sections.join('\n\n'),
+        sources,
+      };
     }
   }
 
@@ -3694,6 +3978,56 @@ async function answerRagQuestion({
     channel: normalizedChannel,
     manualContext,
   });
+
+  const deterministic = buildDeterministicLiveAnswer({
+    question: cleanQuestion,
+    contextText: context.text,
+  });
+
+  if (deterministic) {
+    const answer = truncateText(deterministic.answer, 4000);
+    const memorySummary = truncateText(deterministic.memorySummary || '', 1000);
+    const followUpQuestions = Array.isArray(deterministic.followUpQuestions)
+      ? deterministic.followUpQuestions.map((item) => safeString(item)).filter(Boolean).slice(0, 3)
+      : [];
+    const shouldCloseConversation = deterministic.shouldCloseConversation !== false;
+    const finalAnswer = shouldCloseConversation
+      ? `${answer.trim()}\n\n¿Hay algo más en lo que te pueda ayudar?`.trim()
+      : answer;
+
+    const memoryResult = await storeConversationMemory({
+      tenantId: context.tenantId || null,
+      userId,
+      userName,
+      role,
+      question: cleanQuestion,
+      answer: finalAnswer,
+      conversationId: effectiveConversationId,
+      channel: normalizedChannel,
+      memorySummary,
+      sources: context.sources,
+      followUpQuestions,
+      conversationStatus: shouldCloseConversation ? 'closed' : 'open',
+    }).catch(() => ({
+      memoryStored: false,
+      conversationStored: false,
+    }));
+
+    return {
+      answer: finalAnswer,
+      memorySummary,
+      followUpQuestions,
+      usedContextIds: context.sources.map((item) => item.id),
+      sources: context.sources,
+      contextText: context.text,
+      tenantId: context.tenantId,
+      memoryStored: memoryResult.memoryStored,
+      conversationStored: memoryResult.conversationStored,
+      conversationId: effectiveConversationId,
+      conversationStatus: shouldCloseConversation ? 'closed' : 'open',
+      fallbackMode: false,
+    };
+  }
 
   const systemPrompt = [
     'Eres el asistente RAG profesional de Prestamos Chito.',
