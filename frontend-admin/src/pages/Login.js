@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { authAPI } from '../services/api';
 
 const styleTag = `
@@ -134,9 +133,12 @@ export default function Login({ onLogin }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const navigate = useNavigate();
 
   const handleSubmit = async () => {
+    if (loading) {
+      return;
+    }
+
     if (!email || !password) { setError('Complete todos los campos'); return; }
     setLoading(true); setError('');
     try {
@@ -154,7 +156,9 @@ export default function Login({ onLogin }) {
       }
 
       onLogin(userData, token);
-      navigate('/dashboard', { replace: true });
+      window.setTimeout(() => {
+        window.location.replace('/dashboard');
+      }, 0);
     } catch (err) {
       setError(err.response?.data?.error || 'Error al iniciar sesión');
     } finally { setLoading(false); }
@@ -185,7 +189,12 @@ export default function Login({ onLogin }) {
             placeholder="admin@gotaagota.com"
             value={email}
             onChange={e => setEmail(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
           />
 
           <label style={s.label}>Contraseña</label>
@@ -196,12 +205,18 @@ export default function Login({ onLogin }) {
             placeholder="••••••••"
             value={password}
             onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
           />
 
           <button
             className="login-btn"
             style={s.btn}
+            type="button"
             onClick={handleSubmit}
             disabled={loading}
           >
